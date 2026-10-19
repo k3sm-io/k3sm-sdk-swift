@@ -13,6 +13,12 @@
 #   5. every .swift file carries the Apache-2.0 header
 #   6. every file under .github/workflows/ is dormant (fully commented out)
 #   7. the dependency supply-chain check: its self-test, then the live tree
+#   8. the version constants against a v* tag on HEAD (hack/verify-version.sh)
+#   9. swift test under the address, undefined-behavior and thread sanitizers
+#
+# A stage name as the first argument runs that stage alone: --reader,
+# --notifier, --stress, --bench-rig (placeholders until their items land),
+# --sanitize, --version-check.
 #
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
 # package, build and test run. SwiftPM applies its own sandbox when it compiles
@@ -21,12 +27,26 @@
 # this to turn off the inner sandbox and keep its own. Unset, nothing changes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+stage="${1:-}"
+case "$stage" in
+	--reader|--notifier|--stress|--bench-rig)
+		echo "==> ${stage#--}"
+		echo "    not yet implemented"
+		exit 0 ;;
+	""|--sanitize|--version-check) ;;
+	*) echo "usage: hack/ci.sh [--reader|--notifier|--stress|--bench-rig|--sanitize|--version-check]"; exit 2 ;;
+esac
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 for tool in swift git; do
 	command -v "$tool" >/dev/null || { echo "FAIL: $tool is not installed"; exit 1; }
 done
+
+# swift-tools-version 6.0 makes Swift 6.0 the minimum compiler.
+swiftver="$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9]\{1,\}\).*/\1/p' | head -n 1)"
+[ -n "$swiftver" ] && [ "$swiftver" -ge 6 ] \
+	|| { echo "FAIL: Swift 6.0 or later is required (found: ${swiftver:-unknown})"; exit 1; }
 
 SWIFT_FLAGS=()
 if [ "${K3SM_SWIFTPM_DISABLE_SANDBOX:-}" = 1 ]; then
@@ -41,6 +61,24 @@ plugdir="$devdir/usr/lib/swift/host/plugins/testing"
 if [ -n "$devdir" ] && [ -f "$plugdir/libTestingMacros.dylib" ]; then
 	TEST_FLAGS=(-Xswiftc -plugin-path -Xswiftc "$plugdir")
 fi
+
+run_sanitizers() {
+	echo "==> swift test --sanitize=address,undefined (ASan, UBSan)"
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=address
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=undefined
+	echo "==> swift test --sanitize=thread (TSan)"
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=thread
+}
+
+run_version_check() {
+	echo "==> version constants (hack/verify-version.sh)"
+	bash hack/verify-version.sh
+}
+
+case "$stage" in
+	--sanitize) run_sanitizers; exit 0 ;;
+	--version-check) run_version_check; exit 0 ;;
+esac
 
 echo "==> no third-party dependencies"
 # The package depends on nothing outside the toolchain, which is also why there
@@ -147,5 +185,14 @@ echo "    ok"
 echo "==> dependency supply-chain (hack/verify-deps.sh)"
 bash hack/verify-deps.sh --self-test
 bash hack/verify-deps.sh
+
+run_version_check
+
+run_sanitizers
+
+echo "==> placeholder stages (--reader --notifier --stress --bench-rig)"
+for st in --reader --notifier --stress --bench-rig; do
+	bash hack/ci.sh "$st" | sed 's/^/    /'
+done
 
 echo "k3sm-sdk-swift ci: green"

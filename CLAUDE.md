@@ -24,6 +24,11 @@ hack/ci.sh      # the full gate
 - `hack/ci.sh` is the gate: no declared dependencies; `swift build` and `swift test`; a consumer
   package that depends on a git clone of the checkout by `.package(url: "file://...", revision:)`
   and builds; shellcheck; license headers; dormant workflows; the dependency check.
+- Named stages run alone: `--reader`, `--notifier`, `--stress`, `--bench-rig` (placeholders that print
+  "not yet implemented" until their items land), `--sanitize` (address, undefined, thread) and
+  `--version-check` (`hack/verify-version.sh`: a `v*` tag on HEAD equals `K3smSDKVersion`).
+- A consumer pins `.package(url:, revision: "<40-hex sha>") // vX.Y.Z`, never `from:`, a tag or a branch,
+  and lists the revision in its own `deps.allow`.
 - A caller that already runs inside a sandbox sets `K3SM_SWIFTPM_DISABLE_SANDBOX=1`: SwiftPM's own
   sandbox cannot nest inside another, so `ci.sh` then passes `--disable-sandbox`.
 - With only the Command Line Tools, `swift test` needs the swift-testing macro plugin path;
@@ -32,7 +37,8 @@ hack/ci.sh      # the full gate
   `.package(` not listed in `hack/deps.allow` with an exact revision, and the allow file is empty.
 
 ## Conventions
-- **Swift 6 language mode, macOS 26 and later.** Public types are `Sendable` where they can be.
+- **`swift-tools-version:6.0`, so Swift 6.0 is the minimum compiler** (`ci.sh` refuses an older one).
+  Swift 6 language mode (strict concurrency), macOS 26 and later. Public types are `Sendable` where they can be.
 - **A consumer needs no options.** `.package(url:revision:)` and `.product(name: "K3smSDK",
   package: "k3sm-sdk-swift")` give the library and build nothing else.
 - Every `.swift` file starts with the Apache-2.0 header in `hack/boilerplate/boilerplate.swift.txt`
