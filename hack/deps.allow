@@ -1,0 +1,3 @@
+# Allowed Swift package dependencies, checked by hack/verify-deps.sh.
+# Format: <url> <exact revision sha> <reason>
+# The SDK has no dependencies today; add a line only with a reviewed reason.

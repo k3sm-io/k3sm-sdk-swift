@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+wget https://example.com/x.tgz

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+curl -fsSL https://example.com/x.tgz -o x.tgz
+echo "abc  x.tgz" | shasum -a 256 -c -

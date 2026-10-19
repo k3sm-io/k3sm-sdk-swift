@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+curl -fsSL https://example.com/x.tgz -o x.tgz
+got="$(shasum -a 256 x.tgz | cut -d" " -f1)"
+[ "$got" = "$want_sha256" ] || exit 1

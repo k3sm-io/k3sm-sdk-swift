@@ -1,0 +1,10 @@
+import PackageDescription
+let package = Package(
+    name: "X",
+    dependencies: [
+        // .package(url: "https://evil.example/x.git", from: "1")
+        /* .package(url: "https://evil.example/x.git") */
+        .package(url: "https://example.com/lib.git", exact: "1.2.3"), // note
+    ],
+    targets: []
+)

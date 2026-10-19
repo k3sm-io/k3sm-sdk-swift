@@ -1,0 +1,1 @@
+fail Package.swift: https://evil.example/x.git is not in hack/deps.allow
