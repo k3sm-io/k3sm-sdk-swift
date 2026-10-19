@@ -29,3 +29,9 @@ func versionStringMatchesNumbers() {
     let want = "\(K3smSDKVersion.major).\(K3smSDKVersion.minor).\(K3smSDKVersion.patch)"
     #expect(K3smSDKVersion.string == want)
 }
+
+@Test("the page ABI major and the NodeBudget apiVersion are pinned")
+func contractConstantsArePinned() {
+    #expect(K3smSDKVersion.pageABIMajor == 1)
+    #expect(K3smSDKVersion.nodeBudgetAPIVersion == "budget.k3sm.io/v1alpha1")
+}

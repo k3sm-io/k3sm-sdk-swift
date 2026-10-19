@@ -26,4 +26,8 @@ public enum K3smSDKVersion {
     public static let patch = 0
     /// The version as "major.minor.patch".
     public static let string = "0.0.0"
+    /// The one page ABI major this SDK reads. An unknown major is an ABI mismatch.
+    public static let pageABIMajor = 1
+    /// The apiVersion of the NodeBudget custom resource this SDK reads.
+    public static let nodeBudgetAPIVersion = "budget.k3sm.io/v1alpha1"
 }
