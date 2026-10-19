@@ -2,7 +2,8 @@
 
 A Swift client for the k3sm node pressure and headroom API (SwiftPM package `K3smSDK`, one library
 product of the same name). It is a leaf: it talks to a k3sm node over the API that node serves and
-imports no code from the other k3sm repositories.
+imports no code from the other k3sm repositories. It has no dependencies, and it has no edge back
+to the k3sm macOS app or to k3sm: the app may depend on the SDK, never the reverse.
 
 > User-facing behavior: `README.md`.
 
