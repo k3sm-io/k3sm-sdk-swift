@@ -18,10 +18,14 @@
 #  10. the NodeBudget status types: the vendored goldens match their digests
 #      (hack/verify-fixtures.sh, after its self-test) and the gate test
 #      decodes and re-encodes them key for key
+#  11. the budget page reader: the vendored page fixtures match their
+#      digests and the reader tests decode the golden pages, give each
+#      negative page its manifest error and turn a scripted torn read into
+#      torn (they also run under the sanitizers in stage 9)
 #
 # A stage name as the first argument runs that stage alone: --reader,
-# --notifier, --stress, --bench-rig (placeholders until their items land),
-# --sanitize, --version-check, --nodebudget.
+# --sanitize, --version-check, --nodebudget, and --notifier, --stress,
+# --bench-rig (placeholders until their items land).
 #
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
 # package, build and test run. SwiftPM applies its own sandbox when it compiles
@@ -32,12 +36,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 stage="${1:-}"
 case "$stage" in
-	--reader|--notifier|--stress|--bench-rig)
+	--notifier|--stress|--bench-rig)
 		echo "==> ${stage#--}"
 		echo "    not yet implemented"
 		exit 0 ;;
-	""|--sanitize|--version-check|--nodebudget) ;;
-	*) echo "usage: hack/ci.sh [--reader|--notifier|--stress|--bench-rig|--sanitize|--version-check|--nodebudget]"; exit 2 ;;
+	""|--reader|--sanitize|--version-check|--nodebudget) ;;
+	*) echo "usage: hack/ci.sh [--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig]"; exit 2 ;;
 esac
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -86,10 +90,19 @@ run_nodebudget() {
 		--filter statusTypesCoverGoldenNodeBudgetDocuments
 }
 
+run_reader() {
+	echo "==> budget page reader (hack/verify-fixtures.sh, BudgetPageReaderTests)"
+	bash hack/verify-fixtures.sh --self-test
+	bash hack/verify-fixtures.sh "$PWD/Tests/K3smSDKTests/Fixtures/page"
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+		--filter BudgetPageReaderTests
+}
+
 case "$stage" in
 	--sanitize) run_sanitizers; exit 0 ;;
 	--version-check) run_version_check; exit 0 ;;
 	--nodebudget) run_nodebudget; exit 0 ;;
+	--reader) run_reader; exit 0 ;;
 esac
 
 echo "==> no third-party dependencies"
@@ -204,8 +217,10 @@ run_sanitizers
 
 run_nodebudget
 
-echo "==> placeholder stages (--reader --notifier --stress --bench-rig)"
-for st in --reader --notifier --stress --bench-rig; do
+run_reader
+
+echo "==> placeholder stages (--notifier --stress --bench-rig)"
+for st in --notifier --stress --bench-rig; do
 	bash hack/ci.sh "$st" | sed 's/^/    /'
 done
 
