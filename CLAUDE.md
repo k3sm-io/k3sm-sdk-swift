@@ -9,12 +9,14 @@ to the k3sm macOS app or to k3sm: the app may depend on the SDK, never the rever
 
 **The client API is under design review.** Until that design lands, the repository carries only the
 package, test and gate scaffolding and `Sources/K3smSDK/Version.swift`. Do not add client code ahead
-of the reviewed design.
+of the reviewed design. The one exception the reviewed design makes is parse-only types: the
+Codable NodeBudget status types under `Sources/K3smSDK/NodeBudget/`, which decode a document the
+caller already holds and do no file or network I/O.
 
 ## Layout
 - **`Sources/K3smSDK/`**: the library. Everything public is reachable through `import K3smSDK`.
 - **`Tests/K3smSDKTests/`**: Swift Testing tests (`@Test`), run by `swift test`.
-- **`hack/`**: the gate and its checks; `hack/testdata/` holds the dependency check's fixtures.
+- **`hack/`**: the gate and its checks; `hack/testdata/` holds the dependency and fixture checks' red-path fixtures.
 
 ## Build / test
 ```sh
@@ -27,7 +29,11 @@ hack/ci.sh      # the full gate
   and builds; shellcheck; license headers; dormant workflows; the dependency check.
 - Named stages run alone: `--reader`, `--notifier`, `--stress`, `--bench-rig` (placeholders that print
   "not yet implemented" until their items land), `--sanitize` (address, undefined, thread) and
-  `--version-check` (`hack/verify-version.sh`: a `v*` tag on HEAD equals `K3smSDKVersion`).
+  `--version-check` (`hack/verify-version.sh`: a `v*` tag on HEAD equals `K3smSDKVersion`) and
+  `--nodebudget` (`hack/verify-fixtures.sh` and the golden-document gate test).
+- Test fixtures copied from another repository are vendored byte for byte, each with a digest line
+  in its directory's `FIXTURES.sha256`; `hack/verify-fixtures.sh` fails on a mismatch or on a file
+  without a line.
 - A consumer pins `.package(url:, revision: "<40-hex sha>") // vX.Y.Z`, never `from:`, a tag or a branch,
   and lists the revision in its own `deps.allow`.
 - A caller that already runs inside a sandbox sets `K3SM_SWIFTPM_DISABLE_SANDBOX=1`: SwiftPM's own

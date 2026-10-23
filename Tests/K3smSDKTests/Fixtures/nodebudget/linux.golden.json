@@ -1,0 +1,150 @@
+{
+  "kind": "NodeBudget",
+  "apiVersion": "budget.k3sm.io/v1alpha1",
+  "metadata": {
+    "name": "linux-worker-1"
+  },
+  "status": {
+    "observedAt": "2026-10-19T12:00:00Z",
+    "producerGeneration": 9,
+    "platform": "linux",
+    "level": "evicting",
+    "admitReasonSignal": "memory.available",
+    "evictDeadline": "2026-10-19T12:00:45Z",
+    "capacity": {
+      "cpuCapacityMilli": 16000,
+      "memCapacityBytes": 34359738368,
+      "memAllocatableBytes": 32212254720,
+      "swapTotalBytes": 0,
+      "swapUsedBytes": 0
+    },
+    "signals": [
+      {
+        "id": "memory.available",
+        "unit": "bytes",
+        "value": 419430400,
+        "warnThreshold": 4294967296,
+        "admitStopThreshold": 3221225472,
+        "criticalThreshold": 1677721600,
+        "evictSoftThreshold": 838860800,
+        "evictHardThreshold": 104857600,
+        "graceSeconds": 90,
+        "minReclaimBytes": 536870912,
+        "etaToNextRungSeconds": 30,
+        "trend": "falling",
+        "limitingResource": "memory"
+      }
+    ],
+    "recommendation": {
+      "safeAdditionalBytes": 0,
+      "basis": "memory.available"
+    },
+    "killMode": {
+      "mode": "on",
+      "armed": true,
+      "armingEpisodes": 3,
+      "reason": "armed"
+    },
+    "wouldKill": {
+      "band": "batch",
+      "reason": "held-pressure",
+      "at": "2026-10-19T12:00:00Z"
+    },
+    "counters": [
+      {
+        "band": "batch",
+        "evictionsTotal": 2,
+        "oomKillsTotal": 0,
+        "kernelKillsTotal": 0,
+        "restartsTotal": 0,
+        "memHighEventsTotal": 11,
+        "tier1RefusedTotal": 1,
+        "windows": [
+          {
+            "window": "1h",
+            "reason": "tier1-refused",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "policy": {
+      "name": "linux-workers",
+      "resourceVersion": "88",
+      "outcome": "clamped",
+      "clampedFields": [
+        "tier1GraceSeconds"
+      ]
+    },
+    "inForce": {
+      "name": "linux-workers",
+      "resourceVersion": "88"
+    },
+    "linux": {
+      "psi": {
+        "cpu": {
+          "some": {
+            "avg10Permille": 120,
+            "avg60Permille": 80,
+            "totalUs": 5000000
+          },
+          "full": {
+            "avg10Permille": 0,
+            "avg60Permille": 0,
+            "totalUs": 0
+          }
+        },
+        "memory": {
+          "some": {
+            "avg10Permille": 610,
+            "avg60Permille": 420,
+            "totalUs": 9000000
+          },
+          "full": {
+            "avg10Permille": 300,
+            "avg60Permille": 200,
+            "totalUs": 4000000
+          }
+        },
+        "io": {
+          "some": {
+            "avg10Permille": 10,
+            "avg60Permille": 5,
+            "totalUs": 700000
+          },
+          "full": {
+            "avg10Permille": 4,
+            "avg60Permille": 2,
+            "totalUs": 300000
+          }
+        }
+      },
+      "memoryEvents": {
+        "high": 11,
+        "max": 2,
+        "oom": 1,
+        "oomKill": 1
+      }
+    },
+    "writer": {
+      "shape": "own-node",
+      "nodeNameExtra": true
+    },
+    "conditions": [
+      {
+        "type": "Reporting",
+        "status": "True",
+        "lastTransitionTime": "2026-10-19T12:00:00Z",
+        "reason": "NodeReporting",
+        "message": ""
+      },
+      {
+        "type": "PolicyClamped",
+        "status": "True",
+        "lastTransitionTime": "2026-10-19T12:00:00Z",
+        "reason": "FieldsClamped",
+        "message": "tier1GraceSeconds raised to the 10 s floor"
+      }
+    ]
+  }
+}

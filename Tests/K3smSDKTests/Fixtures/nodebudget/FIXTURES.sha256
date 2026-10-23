@@ -1,0 +1,3 @@
+# apis@af0054b budget/v1alpha1/testdata/status (interim: replaced by the apis-published manifest when it lands)
+5a8715381d2867b3dfd3d189019ed483fb23a2438284ff1cf5768c29e66d227f  darwin.golden.json
+857bab5fb34d3dbd88b05f928c30c28ab3b1aff8962a938488204e901cee8a7c  linux.golden.json
