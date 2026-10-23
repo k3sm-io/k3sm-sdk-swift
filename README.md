@@ -5,9 +5,13 @@ A Swift client for the node pressure and headroom API of
 Silicon. It is for Swift programs that run on a k3sm node and need to react to
 that node's resource pressure and headroom.
 
-**Status: the client API is being designed.** This repository holds the
-package, test and gate scaffolding only. The one public declaration today is
-`K3smSDKVersion`; nothing here talks to a node yet.
+**Status: the client API is being designed, and two parts have shipped.**
+The package carries the `NodeBudget` status types (`Sources/K3smSDK/NodeBudget`,
+Codable and parse-only, no I/O) and `BudgetPage`
+(`Sources/K3smSDK/Page`), a read-only mapping of the node budget page that
+reads a stable `BudgetSnapshot` under the writer's seqlock and reports
+failures as `BudgetError`. The change notifier and the rest of the client are
+not here yet.
 
 ## Use it
 
@@ -30,6 +34,28 @@ targets: [
 import K3smSDK
 
 print(K3smSDKVersion.string)
+```
+
+Read the node budget page. `BudgetPage.defaultPagePath` is the page's location
+for the platform the SDK is built for:
+
+```swift
+import K3smSDK
+
+do {
+    let page = try BudgetPage.open(path: BudgetPage.defaultPagePath)
+    switch page.read() {
+    case .success(let snapshot):
+        print("admit:", snapshot.admitOK)
+        if let room = snapshot.bytesUntil(signal: .memoryCompressor, rung: .admitStop) {
+            print("bytes until admit-stop:", room)
+        }
+    case .failure(let error):
+        print("no stable read:", error)
+    }
+} catch {
+    print("cannot open the page:", error)
+}
 ```
 
 ## Build and test
