@@ -5,29 +5,40 @@
 # verify-fixtures.sh [--self-test] [dir] -- the vendored test fixtures are the
 # bytes their manifest names.
 #
-#   1. <dir>/FIXTURES.sha256 exists and carries at least one digest line, in
-#      `shasum -a 256` format ("<64 hex>  <file name>"); '#' lines are comments
+#   1. <dir> has one digest manifest, FIXTURES.sha256 (written here) or
+#      SHA256SUMS (vendored as published with the fixtures), carrying at least
+#      one digest line in `shasum -a 256` format ("<64 hex>  <path>"); the
+#      path is relative to <dir>, may name a subdirectory, and never starts
+#      with '/' or holds a '..' part; '#' lines are comments
 #   2. `shasum -a 256 -c` passes: every listed file exists with its digest
-#   3. every other file in <dir> has a digest line, so an undigested fixture
-#      cannot ride along
+#   3. every other file under <dir>, subdirectories included, has a digest
+#      line, so an undigested fixture cannot ride along
 #
-# The default dir is Tests/K3smSDKTests/Fixtures/nodebudget. --self-test runs
-# the rules against the hermetic fixtures in hack/testdata/verify-fixtures/,
-# each a directory of files plus an `expect` line: "pass" or "fail <text>".
+# With no dir, every vendored fixture dir is checked:
+# Tests/K3smSDKTests/Fixtures/nodebudget and Tests/K3smSDKTests/Fixtures/page.
+# --self-test runs the rules against the hermetic fixtures in
+# hack/testdata/verify-fixtures/, each a directory of files plus an `expect`
+# line: "pass" or "fail <text>".
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 cases="$here/testdata/verify-fixtures"
-manifest_name=FIXTURES.sha256
+manifest_names="FIXTURES.sha256 SHA256SUMS"
 
 # check <dir>: print each problem; exit 1 if any.
 check() {
-	local dir="$1" manifest bad=0 line f name out
-	manifest="$dir/$manifest_name"
-	[ -f "$manifest" ] || { echo "    FAIL: no $manifest_name in $dir"; return 1; }
+	local dir="$1" manifest="" manifest_name="" m bad=0 line f name out
+	for m in $manifest_names; do
+		if [ -f "$dir/$m" ]; then
+			[ -z "$manifest" ] || { echo "    FAIL: both $manifest_name and $m in $dir"; return 1; }
+			manifest="$dir/$m"; manifest_name="$m"
+		fi
+	done
+	[ -n "$manifest" ] || { echo "    FAIL: no FIXTURES.sha256 or SHA256SUMS in $dir"; return 1; }
 	while IFS= read -r line || [ -n "$line" ]; do
 		case "$line" in '#'*|'') continue ;; esac
-		if ! printf '%s\n' "$line" | grep -Eq '^[0-9a-f]{64}  [^/]+$'; then
+		if ! printf '%s\n' "$line" | grep -Eq '^[0-9a-f]{64}  [^/[:space:]][^[:space:]]*$' \
+			|| printf '%s\n' "$line" | grep -Eq '(^[0-9a-f]{64}  |/)\.\.(/|$)'; then
 			echo "    FAIL: $manifest_name: not a digest line: $line"; bad=1
 		fi
 	done < "$manifest"
@@ -40,12 +51,12 @@ check() {
 		echo "    FAIL: a fixture does not match its digest"; bad=1
 	fi
 	while IFS= read -r -d '' f; do
-		name="$(basename "$f")"
+		name="${f#"$dir"/}"
 		[ "$name" = "$manifest_name" ] && continue
 		if ! awk -v n="$name" '$1 ~ /^[0-9a-f]{64}$/ && substr($0, 67) == n { found = 1 } END { exit !found }' "$manifest"; then
 			echo "    FAIL: $name has no digest line in $manifest_name"; bad=1
 		fi
-	done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0)
+	done < <(find "$dir" -mindepth 1 -type f -print0)
 	return "$bad"
 }
 
@@ -58,7 +69,8 @@ self_test() {
 		read -r want substr < "$d/expect"
 		substr="${substr:-}"
 		mkdir "$tmp/$name"
-		find "$d" -mindepth 1 -maxdepth 1 -type f ! -name expect -exec cp -p {} "$tmp/$name/" \;
+		cp -Rp "$d/." "$tmp/$name/"
+		rm "$tmp/$name/expect"
 		status=0
 		out="$(check "$tmp/$name" 2>&1)" || status=$?
 		case "$want" in
@@ -79,8 +91,14 @@ self_test() {
 case "${1:-}" in
 --self-test) self_test ;;
 *)
-	dir="${1:-$here/../Tests/K3smSDKTests/Fixtures/nodebudget}"
-	dir="$(cd "$dir" && pwd)"
-	if check "$dir"; then echo "    ok"; else echo "FAIL: vendored fixtures ($dir)"; exit 1; fi
+	if [ $# -gt 0 ]; then
+		dirs=("$1")
+	else
+		dirs=("$here/../Tests/K3smSDKTests/Fixtures/nodebudget" "$here/../Tests/K3smSDKTests/Fixtures/page")
+	fi
+	for dir in "${dirs[@]}"; do
+		dir="$(cd "$dir" && pwd)"
+		if check "$dir"; then echo "    ok: $dir"; else echo "FAIL: vendored fixtures ($dir)"; exit 1; fi
+	done
 	;;
 esac

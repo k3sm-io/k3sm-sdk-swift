@@ -18,10 +18,14 @@
 #  10. the NodeBudget status types: the vendored goldens match their digests
 #      (hack/verify-fixtures.sh, after its self-test) and the gate test
 #      decodes and re-encodes them key for key
+#  11. the budget page reader: the vendored page fixtures match their
+#      digests and the reader tests decode the golden pages, give each
+#      negative page its manifest error and turn a scripted torn read into
+#      torn (they also run under the sanitizers in stage 9)
 #
 # A stage name as the first argument runs that stage alone: --reader,
-# --notifier, --stress, --bench-rig (placeholders until their items land),
-# --sanitize, --version-check, --nodebudget.
+# --sanitize, --version-check, --nodebudget, and --notifier, --stress,
+# --bench-rig (placeholders until their items land).
 #
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
 # package, build and test run. SwiftPM applies its own sandbox when it compiles
@@ -32,12 +36,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 stage="${1:-}"
 case "$stage" in
-	--reader|--notifier|--stress|--bench-rig)
+	--notifier|--stress|--bench-rig)
 		echo "==> ${stage#--}"
 		echo "    not yet implemented"
 		exit 0 ;;
-	""|--sanitize|--version-check|--nodebudget) ;;
-	*) echo "usage: hack/ci.sh [--reader|--notifier|--stress|--bench-rig|--sanitize|--version-check|--nodebudget]"; exit 2 ;;
+	""|--reader|--sanitize|--version-check|--nodebudget) ;;
+	*) echo "usage: hack/ci.sh [--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig]"; exit 2 ;;
 esac
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -65,10 +69,21 @@ if [ -n "$devdir" ] && [ -f "$plugdir/libTestingMacros.dylib" ]; then
 	TEST_FLAGS=(-Xswiftc -plugin-path -Xswiftc "$plugdir")
 fi
 
+# The C target (CK3smPage) is compiled with -fsanitize=undefined under
+# --sanitize=undefined, but swiftc, which links the test bundle, does not link
+# clang's UBSan runtime, so the link fails on the __ubsan_handle_* symbols.
+# Link the toolchain's own runtime explicitly; it ships with clang.
+UBSAN_FLAGS=()
+ubsan_dir="$(xcrun clang -print-resource-dir 2>/dev/null)/lib/darwin"
+ubsan_lib="$ubsan_dir/libclang_rt.ubsan_osx_dynamic.dylib"
+[ -f "$ubsan_lib" ] || { echo "FAIL: the clang UBSan runtime is missing ($ubsan_lib)"; exit 1; }
+UBSAN_FLAGS=(-Xlinker "$ubsan_lib" -Xlinker -rpath -Xlinker "$ubsan_dir")
+
 run_sanitizers() {
 	echo "==> swift test --sanitize=address,undefined (ASan, UBSan)"
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=address
-	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=undefined
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=undefined \
+		"${UBSAN_FLAGS[@]}"
 	echo "==> swift test --sanitize=thread (TSan)"
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=thread
 }
@@ -86,10 +101,19 @@ run_nodebudget() {
 		--filter statusTypesCoverGoldenNodeBudgetDocuments
 }
 
+run_reader() {
+	echo "==> budget page reader (hack/verify-fixtures.sh, BudgetPageReaderTests)"
+	bash hack/verify-fixtures.sh --self-test
+	bash hack/verify-fixtures.sh "$PWD/Tests/K3smSDKTests/Fixtures/page"
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+		--filter BudgetPageReaderTests
+}
+
 case "$stage" in
 	--sanitize) run_sanitizers; exit 0 ;;
 	--version-check) run_version_check; exit 0 ;;
 	--nodebudget) run_nodebudget; exit 0 ;;
+	--reader) run_reader; exit 0 ;;
 esac
 
 echo "==> no third-party dependencies"
@@ -204,8 +228,10 @@ run_sanitizers
 
 run_nodebudget
 
-echo "==> placeholder stages (--reader --notifier --stress --bench-rig)"
-for st in --reader --notifier --stress --bench-rig; do
+run_reader
+
+echo "==> placeholder stages (--notifier --stress --bench-rig)"
+for st in --notifier --stress --bench-rig; do
 	bash hack/ci.sh "$st" | sed 's/^/    /'
 done
 

@@ -24,7 +24,12 @@ let package = Package(
         .library(name: "K3smSDK", targets: ["K3smSDK"]),
     ],
     targets: [
-        .target(name: "K3smSDK"),
-        .testTarget(name: "K3smSDKTests", dependencies: ["K3smSDK"]),
+        // The page reader's seqlock primitives in C11 atomics; part of the
+        // library, not a product of its own.
+        .target(name: "CK3smPage"),
+        .target(name: "K3smSDK", dependencies: ["CK3smPage"]),
+        // The vendored fixtures are read from the source tree by path, not
+        // bundled as resources.
+        .testTarget(name: "K3smSDKTests", dependencies: ["K3smSDK"], exclude: ["Fixtures"]),
     ]
 )
