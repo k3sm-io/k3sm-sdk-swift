@@ -203,12 +203,6 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
 // MARK: - tests
 
 @Suite struct BudgetPageReaderTests {
-    @Test func atomicOverlayIsOneAlignedWord() {
-        #expect(MemoryLayout<Atomic<UInt64>>.size == 8)
-        #expect(MemoryLayout<Atomic<UInt64>>.alignment == 8)
-        #expect(MemoryLayout<Atomic<UInt64>>.stride == 8)
-    }
-
     @Test func readerConstantsMatchManifest() throws {
         let m = try manifest()
         #expect(try manifestInt(m, "pageABIMajor") == Int64(K3smSDKVersion.pageABIMajor))

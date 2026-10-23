@@ -69,10 +69,21 @@ if [ -n "$devdir" ] && [ -f "$plugdir/libTestingMacros.dylib" ]; then
 	TEST_FLAGS=(-Xswiftc -plugin-path -Xswiftc "$plugdir")
 fi
 
+# The C target (CK3smPage) is compiled with -fsanitize=undefined under
+# --sanitize=undefined, but swiftc, which links the test bundle, does not link
+# clang's UBSan runtime, so the link fails on the __ubsan_handle_* symbols.
+# Link the toolchain's own runtime explicitly; it ships with clang.
+UBSAN_FLAGS=()
+ubsan_dir="$(xcrun clang -print-resource-dir 2>/dev/null)/lib/darwin"
+ubsan_lib="$ubsan_dir/libclang_rt.ubsan_osx_dynamic.dylib"
+[ -f "$ubsan_lib" ] || { echo "FAIL: the clang UBSan runtime is missing ($ubsan_lib)"; exit 1; }
+UBSAN_FLAGS=(-Xlinker "$ubsan_lib" -Xlinker -rpath -Xlinker "$ubsan_dir")
+
 run_sanitizers() {
 	echo "==> swift test --sanitize=address,undefined (ASan, UBSan)"
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=address
-	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=undefined
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=undefined \
+		"${UBSAN_FLAGS[@]}"
 	echo "==> swift test --sanitize=thread (TSan)"
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=thread
 }

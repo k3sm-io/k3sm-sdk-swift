@@ -7,14 +7,14 @@ to the k3sm macOS app or to k3sm: the app may depend on the SDK, never the rever
 
 > User-facing behavior: `README.md`.
 
-**The client API is under design review.** Until that design lands, the repository carries only the
-package, test and gate scaffolding and `Sources/K3smSDK/Version.swift`. Do not add client code ahead
-of the reviewed design. The one exception the reviewed design makes is parse-only types: the
-Codable NodeBudget status types under `Sources/K3smSDK/NodeBudget/`, which decode a document the
-caller already holds and do no file or network I/O.
+**The client API follows the reviewed design; add nothing ahead of it.** What exists: the Codable
+NodeBudget status types under `Sources/K3smSDK/NodeBudget/` (parse-only, no I/O) and the budget page
+reader under `Sources/K3smSDK/Page/` (`BudgetPage`, a read-only mapping read under the writer's
+seqlock through the C11 primitives of the in-package `Sources/CK3smPage` target).
 
 ## Layout
 - **`Sources/K3smSDK/`**: the library. Everything public is reachable through `import K3smSDK`.
+- **`Sources/CK3smPage/`**: the page reader's C11 seqlock primitives, imported internally by `K3smSDK`.
 - **`Tests/K3smSDKTests/`**: Swift Testing tests (`@Test`), run by `swift test`.
 - **`hack/`**: the gate and its checks; `hack/testdata/` holds the dependency and fixture checks' red-path fixtures.
 
@@ -27,8 +27,9 @@ hack/ci.sh      # the full gate
 - `hack/ci.sh` is the gate: no declared dependencies; `swift build` and `swift test`; a consumer
   package that depends on a git clone of the checkout by `.package(url: "file://...", revision:)`
   and builds; shellcheck; license headers; dormant workflows; the dependency check.
-- Named stages run alone: `--reader`, `--notifier`, `--stress`, `--bench-rig` (placeholders that print
-  "not yet implemented" until their items land), `--sanitize` (address, undefined, thread) and
+- Named stages run alone: `--reader` (the page fixtures' digests and the `BudgetPageReaderTests`
+  suite), `--notifier`, `--stress`, `--bench-rig` (placeholders that print "not yet implemented"
+  until their items land), `--sanitize` (address, undefined, thread) and
   `--version-check` (`hack/verify-version.sh`: a `v*` tag on HEAD equals `K3smSDKVersion`) and
   `--nodebudget` (`hack/verify-fixtures.sh` and the golden-document gate test).
 - Test fixtures copied from another repository are vendored byte for byte, each with a digest line

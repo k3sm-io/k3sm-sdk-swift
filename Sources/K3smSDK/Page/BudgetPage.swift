@@ -19,7 +19,7 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
-import Synchronization
+internal import CK3smPage
 
 /// A read-only mapping of the node budget page.
 ///
@@ -30,7 +30,7 @@ import Synchronization
 /// life of the object.
 public final class BudgetPage: @unchecked Sendable {
     // @unchecked: the mapping is immutable after init and only ever read,
-    // through atomic loads, so sharing the object across threads is safe.
+    // through C11 atomic loads, so sharing the object across threads is safe.
 
     /// Where a native Darwin pod finds the page.
     public static let darwinPagePath = "/var/lib/k3sm/budget/budget.v1.page"
@@ -124,34 +124,27 @@ public final class BudgetPage: @unchecked Sendable {
         read(now: now, afterAttempt: { _ in })
     }
 
-    @inline(__always)
-    private func word(_ offset: Int) -> UnsafePointer<Atomic<UInt64>> {
-        (base + offset).assumingMemoryBound(to: Atomic<UInt64>.self)
-    }
-
-    /// The seqlock read: seq loaded acquiring (odd: the writer is mid-write,
-    /// try again), every body word loaded relaxed into a local copy, an
-    /// acquiring fence, seq reloaded relaxed and compared. After
-    /// `PageLayout.readerRetries` attempts the read is torn. `afterAttempt`
-    /// runs after each attempt's loads and before its second seq load, with
-    /// the attempt number; tests script a writer through it.
+    /// The seqlock read, through the C11 primitives of CK3smPage: seq loaded
+    /// acquiring (odd: the writer is mid-write, try again), every body word
+    /// loaded relaxed into a local copy, an acquiring fence, seq reloaded
+    /// relaxed and compared. After `PageLayout.readerRetries` attempts the
+    /// read is torn. `afterAttempt` runs after each attempt's loads and
+    /// before its fence and second seq load, with the attempt number; tests
+    /// script a writer through it.
     func read(now: Int64, afterAttempt: (Int) -> Void) -> Result<BudgetSnapshot, BudgetError> {
         withUnsafeTemporaryAllocation(of: UInt64.self, capacity: PageLayout.bodyWords) { buf in
-            let seqWord = word(PageLayout.seq)
             for attempt in 0..<PageLayout.readerRetries {
-                let s1 = seqWord.pointee.load(ordering: .acquiring)
+                let s1 = ck3sm_page_load_acquire(base, PageLayout.seq)
                 if s1 & 1 == 1 {
                     afterAttempt(attempt)
                     continue
                 }
-                for i in 0..<PageLayout.bodyWords {
-                    buf[i] = word(PageLayout.headerSize + 8 * i).pointee.load(ordering: .relaxed)
-                }
+                ck3sm_page_load_words_relaxed(base, PageLayout.headerSize, buf.baseAddress, PageLayout.bodyWords)
                 afterAttempt(attempt)
-                atomicMemoryFence(ordering: .acquiring)
-                let s2 = seqWord.pointee.load(ordering: .relaxed)
+                ck3sm_page_fence_acquire()
+                let s2 = ck3sm_page_load_relaxed(base, PageLayout.seq)
                 guard s1 == s2 else { continue }
-                let epoch = word(PageLayout.notifyEpoch).pointee.load(ordering: .relaxed)
+                let epoch = ck3sm_page_load_relaxed(base, PageLayout.notifyEpoch)
                 return PageDecoder(words: UnsafeBufferPointer(buf)).snapshot(seq: s1, notifyEpoch: epoch, now: now)
             }
             return .failure(.torn)
