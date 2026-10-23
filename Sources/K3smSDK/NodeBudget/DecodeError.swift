@@ -21,6 +21,9 @@ public enum NodeBudgetDecodeError: Error, Equatable, Sendable, CustomStringConve
     case malformed(path: String, reason: String)
     /// The document's apiVersion is missing or is not the one this SDK reads.
     case unsupportedVersion
+    /// The document's kind is missing or is not the one the decode call
+    /// reads. The payload is the kind found, empty when there is none.
+    case unsupportedKind(String)
     /// The data is not JSON.
     case notJSON
 
@@ -31,6 +34,8 @@ public enum NodeBudgetDecodeError: Error, Equatable, Sendable, CustomStringConve
             return "malformed NodeBudget at \(path.isEmpty ? "<root>" : path): \(reason)"
         case .unsupportedVersion:
             return "unsupported NodeBudget apiVersion, want \(K3smSDKVersion.nodeBudgetAPIVersion)"
+        case let .unsupportedKind(kind):
+            return "unsupported NodeBudget document kind \(kind.isEmpty ? "<missing>" : "\"\(kind)\"")"
         case .notJSON:
             return "the NodeBudget document is not JSON"
         }

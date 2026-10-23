@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import Foundation
-import K3smSDK
+@testable import K3smSDK
 import Testing
 
 // MARK: - fixtures
@@ -73,33 +73,33 @@ private enum JSONValue: Decodable, Equatable {
 /// An array element is spelled "[]". A path in `freeMaps` holds arbitrary keys.
 private let keyRegistry: [String: [String]] = [
     "": keys(NodeBudget.CodingKeys.self),
-    "metadata": keys(ObjectMetadata.CodingKeys.self),
+    "metadata": keys(NodeBudget.ObjectMetadata.CodingKeys.self),
     "status": keys(NodeBudgetStatus.CodingKeys.self),
-    "status.capacity": keys(Capacity.CodingKeys.self),
-    "status.signals[]": keys(Signal.CodingKeys.self),
-    "status.recommendation": keys(Recommendation.CodingKeys.self),
-    "status.killMode": keys(KillMode.CodingKeys.self),
-    "status.wouldKill": keys(WouldKill.CodingKeys.self),
-    "status.counters[]": keys(BandCounters.CodingKeys.self),
-    "status.counters[].windows[]": keys(WindowCount.CodingKeys.self),
-    "status.policy": keys(AppliedPolicy.CodingKeys.self),
-    "status.inForce": keys(PolicyRef.CodingKeys.self),
-    "status.writer": keys(Writer.CodingKeys.self),
-    "status.conditions[]": keys(Condition.CodingKeys.self),
-    "status.darwin": keys(DarwinSignals.CodingKeys.self),
-    "status.darwin.compressor": keys(DarwinCompressor.CodingKeys.self),
-    "status.linux": keys(LinuxSignals.CodingKeys.self),
-    "status.linux.psi": keys(LinuxPSI.CodingKeys.self),
-    "status.linux.psi.cpu": keys(PSIResource.CodingKeys.self),
-    "status.linux.psi.memory": keys(PSIResource.CodingKeys.self),
-    "status.linux.psi.io": keys(PSIResource.CodingKeys.self),
-    "status.linux.psi.cpu.some": keys(PSILine.CodingKeys.self),
-    "status.linux.psi.cpu.full": keys(PSILine.CodingKeys.self),
-    "status.linux.psi.memory.some": keys(PSILine.CodingKeys.self),
-    "status.linux.psi.memory.full": keys(PSILine.CodingKeys.self),
-    "status.linux.psi.io.some": keys(PSILine.CodingKeys.self),
-    "status.linux.psi.io.full": keys(PSILine.CodingKeys.self),
-    "status.linux.memoryEvents": keys(MemoryEvents.CodingKeys.self),
+    "status.capacity": keys(NodeBudget.Capacity.CodingKeys.self),
+    "status.signals[]": keys(NodeBudget.Signal.CodingKeys.self),
+    "status.recommendation": keys(NodeBudget.Recommendation.CodingKeys.self),
+    "status.killMode": keys(NodeBudget.KillMode.CodingKeys.self),
+    "status.wouldKill": keys(NodeBudget.WouldKill.CodingKeys.self),
+    "status.counters[]": keys(NodeBudget.BandCounters.CodingKeys.self),
+    "status.counters[].windows[]": keys(NodeBudget.WindowCount.CodingKeys.self),
+    "status.policy": keys(NodeBudget.AppliedPolicy.CodingKeys.self),
+    "status.inForce": keys(NodeBudget.PolicyRef.CodingKeys.self),
+    "status.writer": keys(NodeBudget.Writer.CodingKeys.self),
+    "status.conditions[]": keys(NodeBudget.Condition.CodingKeys.self),
+    "status.darwin": keys(NodeBudget.DarwinSignals.CodingKeys.self),
+    "status.darwin.compressor": keys(NodeBudget.DarwinCompressor.CodingKeys.self),
+    "status.linux": keys(NodeBudget.LinuxSignals.CodingKeys.self),
+    "status.linux.psi": keys(NodeBudget.LinuxPSI.CodingKeys.self),
+    "status.linux.psi.cpu": keys(NodeBudget.PSIResource.CodingKeys.self),
+    "status.linux.psi.memory": keys(NodeBudget.PSIResource.CodingKeys.self),
+    "status.linux.psi.io": keys(NodeBudget.PSIResource.CodingKeys.self),
+    "status.linux.psi.cpu.some": keys(NodeBudget.PSILine.CodingKeys.self),
+    "status.linux.psi.cpu.full": keys(NodeBudget.PSILine.CodingKeys.self),
+    "status.linux.psi.memory.some": keys(NodeBudget.PSILine.CodingKeys.self),
+    "status.linux.psi.memory.full": keys(NodeBudget.PSILine.CodingKeys.self),
+    "status.linux.psi.io.some": keys(NodeBudget.PSILine.CodingKeys.self),
+    "status.linux.psi.io.full": keys(NodeBudget.PSILine.CodingKeys.self),
+    "status.linux.memoryEvents": keys(NodeBudget.MemoryEvents.CodingKeys.self),
 ]
 
 private let freeMaps: Set<String> = ["metadata.labels", "metadata.annotations"]
@@ -210,7 +210,7 @@ func unknownEnumRoundTrips() throws {
     let level = try #require(budget.status?.level)
     #expect(level.rawValue == "melting")
     #expect(!level.isKnown)
-    #expect(Level.critical.isKnown)
+    #expect(NodeBudget.Level.critical.isKnown)
     #expect(try reencode(budget) == JSONValue.parse(data))
 }
 
@@ -228,7 +228,7 @@ func bareStatusDecodes() throws {
 func listDecodes() throws {
     let items = try goldenNames.map { try jsonObject(golden($0)) }
     let list: [String: Any] = [
-        "apiVersion": K3smSDKVersion.nodeBudgetAPIVersion, "kind": "NodeBudgetList",
+        "apiVersion": K3smSDKVersion.nodeBudgetAPIVersion, "kind": K3smSDKVersion.nodeBudgetListKind,
         "metadata": ["resourceVersion": "12"], "items": items,
     ]
     let decoded = try NodeBudgetDecoder.decodeList(jsonData(list))
@@ -304,4 +304,88 @@ func bareStatusPaths() throws {
         return
     }
     #expect(path == "signals[0].value")
+}
+
+// MARK: - the document kind
+
+/// The golden darwin document with its kind set, or removed when nil.
+private func darwinWithKind(_ kind: String?) throws -> Data {
+    var root = try jsonObject(golden("darwin.golden.json"))
+    root["kind"] = kind
+    return try jsonData(root)
+}
+
+/// A NodeBudgetList holding both goldens, with its kind set, or removed when nil.
+private func listWithKind(_ kind: String?) throws -> Data {
+    var list: [String: Any] = [
+        "apiVersion": K3smSDKVersion.nodeBudgetAPIVersion,
+        "items": try goldenNames.map { try jsonObject(golden($0)) },
+    ]
+    list["kind"] = kind
+    return try jsonData(list)
+}
+
+private struct KindCase: Sendable, CustomStringConvertible {
+    let description: String
+    let list: Bool
+    let data: @Sendable () throws -> Data
+    let want: NodeBudgetDecodeError
+}
+
+private let kindCases: [KindCase] = [
+    KindCase(description: "a NodeBudgetPolicy passed to decodeBudget", list: false,
+             data: { try darwinWithKind("NodeBudgetPolicy") }, want: .unsupportedKind("NodeBudgetPolicy")),
+    KindCase(description: "a NodeBudget without a kind passed to decodeBudget", list: false,
+             data: { try darwinWithKind(nil) }, want: .unsupportedKind("")),
+    KindCase(description: "a kind that is not a string passed to decodeBudget", list: false,
+             data: {
+                 var root = try jsonObject(golden("darwin.golden.json"))
+                 root["kind"] = 7
+                 return try jsonData(root)
+             }, want: .unsupportedKind("")),
+    KindCase(description: "a NodeBudgetList passed to decodeBudget", list: false,
+             data: { try listWithKind(K3smSDKVersion.nodeBudgetListKind) },
+             want: .unsupportedKind("NodeBudgetList")),
+    KindCase(description: "a NodeBudget passed to decodeList", list: true,
+             data: { try golden("darwin.golden.json") }, want: .unsupportedKind("NodeBudget")),
+    KindCase(description: "a NodeBudgetPolicy passed to decodeList", list: true,
+             data: { try listWithKind("NodeBudgetPolicy") }, want: .unsupportedKind("NodeBudgetPolicy")),
+    KindCase(description: "a list without a kind passed to decodeList", list: true,
+             data: { try listWithKind(nil) }, want: .unsupportedKind("")),
+]
+
+@Test("a missing or different kind gives unsupportedKind", arguments: kindCases)
+private func wrongKind(_ c: KindCase) throws {
+    let data = try c.data()
+    let err = #expect(throws: NodeBudgetDecodeError.self) {
+        if c.list { _ = try NodeBudgetDecoder.decodeList(data) } else { _ = try NodeBudgetDecoder.decodeBudget(data) }
+    }
+    #expect(err == c.want)
+}
+
+@Test("the apiVersion is checked before the kind")
+func versionBeforeKind() throws {
+    var root = try jsonObject(golden("darwin.golden.json"))
+    root["apiVersion"] = "budget.k3sm.io/v1beta9"
+    root["kind"] = "NodeBudgetPolicy"
+    let data = try jsonData(root)
+    #expect(throws: NodeBudgetDecodeError.unsupportedVersion) { try NodeBudgetDecoder.decodeBudget(data) }
+}
+
+@Test("a bare status is decoded whatever apiVersion and kind keys it carries")
+func bareStatusIgnoresKind() throws {
+    var status = try #require(jsonObject(golden("linux.golden.json"))["status"] as? [String: Any])
+    status["apiVersion"] = "other/v9"
+    status["kind"] = "NodeBudgetPolicy"
+    let decoded = try NodeBudgetDecoder.decodeStatus(jsonData(status))
+    #expect(decoded.platform == .linux)
+}
+
+@Test("a bare status that is not an object or not JSON gives the typed error")
+func bareStatusShape() throws {
+    let notObject = Data("[1]".utf8)
+    #expect(throws: NodeBudgetDecodeError.malformed(path: "", reason: "the document is not a JSON object")) {
+        try NodeBudgetDecoder.decodeStatus(notObject)
+    }
+    #expect(throws: NodeBudgetDecodeError.notJSON) { try NodeBudgetDecoder.decodeStatus(Data("{".utf8)) }
 }
