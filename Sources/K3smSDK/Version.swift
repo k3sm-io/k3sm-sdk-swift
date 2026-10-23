@@ -14,9 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-/// The SDK's own version. The client API is still being designed; these
-/// constants are the only public declarations the SDK carries until that design
-/// is settled.
+/// The SDK's own version, with the page ABI and NodeBudget wire constants
+/// the SDK reads.
 public enum K3smSDKVersion {
     /// The major version.
     public static let major = 0
