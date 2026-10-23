@@ -15,10 +15,13 @@
 #   7. the dependency supply-chain check: its self-test, then the live tree
 #   8. the version constants against a v* tag on HEAD (hack/verify-version.sh)
 #   9. swift test under the address, undefined-behavior and thread sanitizers
+#  10. the NodeBudget status types: the vendored goldens match their digests
+#      (hack/verify-fixtures.sh, after its self-test) and the gate test
+#      decodes and re-encodes them key for key
 #
 # A stage name as the first argument runs that stage alone: --reader,
 # --notifier, --stress, --bench-rig (placeholders until their items land),
-# --sanitize, --version-check.
+# --sanitize, --version-check, --nodebudget.
 #
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
 # package, build and test run. SwiftPM applies its own sandbox when it compiles
@@ -33,8 +36,8 @@ case "$stage" in
 		echo "==> ${stage#--}"
 		echo "    not yet implemented"
 		exit 0 ;;
-	""|--sanitize|--version-check) ;;
-	*) echo "usage: hack/ci.sh [--reader|--notifier|--stress|--bench-rig|--sanitize|--version-check]"; exit 2 ;;
+	""|--sanitize|--version-check|--nodebudget) ;;
+	*) echo "usage: hack/ci.sh [--reader|--notifier|--stress|--bench-rig|--sanitize|--version-check|--nodebudget]"; exit 2 ;;
 esac
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -75,9 +78,18 @@ run_version_check() {
 	bash hack/verify-version.sh
 }
 
+run_nodebudget() {
+	echo "==> NodeBudget fixtures and status types (hack/verify-fixtures.sh)"
+	bash hack/verify-fixtures.sh --self-test
+	bash hack/verify-fixtures.sh
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+		--filter statusTypesCoverGoldenNodeBudgetDocuments
+}
+
 case "$stage" in
 	--sanitize) run_sanitizers; exit 0 ;;
 	--version-check) run_version_check; exit 0 ;;
+	--nodebudget) run_nodebudget; exit 0 ;;
 esac
 
 echo "==> no third-party dependencies"
@@ -189,6 +201,8 @@ bash hack/verify-deps.sh
 run_version_check
 
 run_sanitizers
+
+run_nodebudget
 
 echo "==> placeholder stages (--reader --notifier --stress --bench-rig)"
 for st in --reader --notifier --stress --bench-rig; do

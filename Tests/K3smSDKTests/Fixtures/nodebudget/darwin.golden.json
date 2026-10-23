@@ -1,0 +1,202 @@
+{
+  "kind": "NodeBudget",
+  "apiVersion": "budget.k3sm.io/v1alpha1",
+  "metadata": {
+    "name": "mac-worker-1"
+  },
+  "status": {
+    "observedAt": "2026-10-19T12:00:00Z",
+    "producerGeneration": 4,
+    "platform": "darwin",
+    "level": "ok",
+    "admit": true,
+    "capacity": {
+      "cpuCapacityMilli": 8000,
+      "cpuSystemReserveMilli": 500,
+      "memCapacityBytes": 17179869184,
+      "memSystemReserveBytes": 2147483648,
+      "memEvictionReserveBytes": 536870912,
+      "memAllocatableBytes": 14495514624,
+      "swapTotalBytes": 4294967296,
+      "swapUsedBytes": 1073741824
+    },
+    "signals": [
+      {
+        "id": "memory.available",
+        "unit": "bytes",
+        "value": 6442450944,
+        "warnThreshold": 2147483648,
+        "admitStopThreshold": 1610612736,
+        "criticalThreshold": 1073741824,
+        "evictSoftThreshold": 536870912,
+        "evictHardThreshold": 104857600,
+        "warnRelease": 2684354560,
+        "admitStopRelease": 2147483648,
+        "criticalRelease": 1610612736,
+        "evictSoftRelease": 805306368,
+        "evictHardRelease": 268435456,
+        "graceSeconds": 90,
+        "minReclaimBytes": 268435456,
+        "trend": "steady",
+        "limitingResource": "memory"
+      },
+      {
+        "id": "memory.compressor",
+        "unit": "permille",
+        "value": 210,
+        "warnThreshold": 500,
+        "admitStopThreshold": 600,
+        "criticalThreshold": 700,
+        "evictSoftThreshold": 750,
+        "evictHardThreshold": 800,
+        "warnRelease": 450,
+        "admitStopRelease": 550,
+        "criticalRelease": 650,
+        "evictSoftRelease": 720,
+        "evictHardRelease": 780,
+        "graceSeconds": 60,
+        "trend": "rising",
+        "limitingResource": "memory"
+      },
+      {
+        "id": "memory.swap",
+        "unit": "bytes",
+        "value": 0,
+        "warnThreshold": 268435456,
+        "admitStopThreshold": 536870912,
+        "criticalThreshold": 1073741824,
+        "windowSeconds": 60,
+        "trend": "steady",
+        "limitingResource": "memory"
+      },
+      {
+        "id": "swapfs.available",
+        "unit": "bytes",
+        "value": 128849018880,
+        "warnThreshold": 25769803776,
+        "admitStopThreshold": 17179869184,
+        "criticalThreshold": 12884901888,
+        "evictHardThreshold": 8589934592,
+        "limitingResource": "swapfs"
+      },
+      {
+        "id": "nodefs.available",
+        "unit": "bytes",
+        "value": 128849018880,
+        "warnThreshold": 21474836480,
+        "admitStopThreshold": 16106127360,
+        "criticalThreshold": 10737418240,
+        "evictHardThreshold": 2147483648,
+        "evictHardRelease": 10737418241,
+        "limitingResource": "nodefs"
+      },
+      {
+        "id": "imagefs.available",
+        "unit": "bytes",
+        "value": 128849018880,
+        "limitingResource": "nodefs",
+        "sharedWith": "nodefs.available"
+      },
+      {
+        "id": "pid.available",
+        "unit": "count",
+        "value": 9000,
+        "warnThreshold": 3000,
+        "admitStopThreshold": 2500,
+        "criticalThreshold": 1500,
+        "evictHardThreshold": 1000,
+        "limitingResource": "pid"
+      }
+    ],
+    "recommendation": {
+      "safeAdditionalBytes": 3221225472,
+      "basis": "memory.available"
+    },
+    "killMode": {
+      "mode": "auto",
+      "armingEpisodes": 2,
+      "reason": "observing"
+    },
+    "counters": [
+      {
+        "band": "critical",
+        "evictionsTotal": 0,
+        "oomKillsTotal": 0,
+        "kernelKillsTotal": 0,
+        "restartsTotal": 0,
+        "memHighEventsTotal": 0,
+        "tier1RefusedTotal": 0
+      },
+      {
+        "band": "standard",
+        "evictionsTotal": 0,
+        "oomKillsTotal": 0,
+        "kernelKillsTotal": 0,
+        "restartsTotal": 3,
+        "memHighEventsTotal": 0,
+        "tier1RefusedTotal": 0
+      },
+      {
+        "band": "batch",
+        "evictionsTotal": 5,
+        "oomKillsTotal": 1,
+        "kernelKillsTotal": 1,
+        "restartsTotal": 7,
+        "memHighEventsTotal": 0,
+        "tier1RefusedTotal": 0,
+        "windows": [
+          {
+            "window": "1h",
+            "reason": "eviction",
+            "count": 1
+          },
+          {
+            "window": "24h",
+            "reason": "eviction",
+            "count": 5
+          }
+        ]
+      }
+    ],
+    "policy": {
+      "name": "default",
+      "resourceVersion": "4711",
+      "outcome": "applied"
+    },
+    "inForce": {
+      "name": "default",
+      "resourceVersion": "4711"
+    },
+    "darwin": {
+      "vmPressureLevel": 1,
+      "memorystatusLevelPermille": 640,
+      "compressor": {
+        "bytesUsed": 1073741824,
+        "bytesStored": 3221225472,
+        "segmentLimitBytes": 8589934592
+      },
+      "swapinsTotal": 1200,
+      "swapoutsTotal": 3400
+    },
+    "writer": {
+      "shape": "annotation-relay"
+    },
+    "conditions": [
+      {
+        "type": "Reporting",
+        "status": "True",
+        "observedGeneration": 1,
+        "lastTransitionTime": "2026-10-19T12:00:00Z",
+        "reason": "NodeReporting",
+        "message": "the node's budget is current"
+      },
+      {
+        "type": "PolicyConflict",
+        "status": "False",
+        "lastTransitionTime": "2026-10-19T12:00:00Z",
+        "reason": "SinglePolicy",
+        "message": ""
+      }
+    ]
+  }
+}

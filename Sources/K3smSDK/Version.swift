@@ -30,4 +30,8 @@ public enum K3smSDKVersion {
     public static let pageABIMajor = 1
     /// The apiVersion of the NodeBudget custom resource this SDK reads.
     public static let nodeBudgetAPIVersion = "budget.k3sm.io/v1alpha1"
+    /// The kind of a NodeBudget document.
+    public static let nodeBudgetKind = "NodeBudget"
+    /// The kind of a NodeBudgetList document.
+    public static let nodeBudgetListKind = "NodeBudgetList"
 }
