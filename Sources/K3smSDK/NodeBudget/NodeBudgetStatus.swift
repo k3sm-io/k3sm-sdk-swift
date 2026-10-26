@@ -40,7 +40,7 @@ public struct NodeBudgetStatus: Codable, Equatable, Sendable {
     public var recommendation: NodeBudget.Recommendation?
     /// The kill mode and whether it is armed.
     public var killMode: NodeBudget.KillMode?
-    /// The band the node would kill next, and why.
+    /// The last tier-1 kill decision, armed or observed: the band and the trigger.
     public var wouldKill: NodeBudget.WouldKill?
     /// Per-band counters.
     public var counters: [NodeBudget.BandCounters]?
@@ -122,7 +122,7 @@ extension NodeBudget {
         }
     }
 
-    /// The band the node would kill next, and why.
+    /// The last tier-1 kill decision, armed or observed: the band and the trigger.
     public struct WouldKill: Codable, Equatable, Sendable {
         /// The band.
         public var band: Band
@@ -212,7 +212,7 @@ extension NodeBudget {
     public struct Writer: Codable, Equatable, Sendable {
         /// The writer's shape.
         public var shape: WriterShape
-        /// Whether the node's name carried an extra component.
+        /// Whether an own-node writer verified its token's node-name claim at start.
         public var nodeNameExtra: Bool?
 
         /// The wire keys.
