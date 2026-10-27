@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # verify-version.sh -- K3smSDKVersion's constants name one version, and a v* tag
-# on HEAD, when there is one, equals it. A "# vX.Y.Z" comment beside a pinned
+# on HEAD, when there is one, equals it. A "// vX.Y.Z" comment after a pinned
 # revision in README.md or CLAUDE.md, when present, must be a well-formed tag.
 set -euo pipefail
 cd "$(dirname "$0")/.."

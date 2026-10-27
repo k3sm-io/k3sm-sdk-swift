@@ -44,7 +44,7 @@ extension NodeBudget {
         public static let memoryAvailable = SignalID(rawValue: "memory.available")
         /// Compressor occupancy, in permille.
         public static let memoryCompressor = SignalID(rawValue: "memory.compressor")
-        /// Swap use, in bytes.
+        /// Swap growth, in bytes over the record's windowSeconds.
         public static let memorySwap = SignalID(rawValue: "memory.swap")
         /// Free space on the swap filesystem, in bytes.
         public static let swapfsAvailable = SignalID(rawValue: "swapfs.available")
@@ -177,7 +177,7 @@ extension NodeBudget {
         public let rawValue: String
         /// Wraps any string, known or not.
         public init(rawValue: String) { self.rawValue = rawValue }
-        /// The node has just started.
+        /// The node has no valid policy yet, and observes.
         public static let coldStart = KillModeReason(rawValue: "cold-start")
         /// The node is still observing.
         public static let observing = KillModeReason(rawValue: "observing")
