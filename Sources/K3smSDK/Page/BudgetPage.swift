@@ -56,7 +56,8 @@ public final class BudgetPage: @unchecked Sendable {
     /// The page's body size in bytes, the region the seqlock covers.
     public let bodySize: UInt32
 
-    private let base: UnsafeRawPointer
+    /// The start of the mapping; the notifier waits on a word of it.
+    let base: UnsafeRawPointer
     private let length: Int
 
     private init(path: String, base: UnsafeRawPointer, length: Int, header: (UInt16, UInt16, UInt32, UInt32)) {

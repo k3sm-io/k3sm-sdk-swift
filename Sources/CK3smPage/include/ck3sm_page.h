@@ -43,4 +43,13 @@ void ck3sm_page_load_words_relaxed(const void *base, size_t offset, uint64_t *ds
 /* atomic_thread_fence(memory_order_acquire). */
 void ck3sm_page_fence_acquire(void);
 
+/* Blocks while the 64-bit word at base + offset holds expected, for at most
+ * timeout_ns (which must be above 0), with os_sync_wait_on_address_with_timeout
+ * and OS_SYNC_WAIT_ON_ADDRESS_SHARED, so a writer in another process that
+ * wakes the same word of its own mapping of the file wakes this thread.
+ * Returns 0 when woken or when the word already differs, ETIMEDOUT when the
+ * timeout ran out, and otherwise the call's errno (EINTR among them). A
+ * return says nothing about the word: the caller reloads and compares it. */
+int ck3sm_page_wait_word(const void *base, size_t offset, uint64_t expected, uint64_t timeout_ns);
+
 #endif

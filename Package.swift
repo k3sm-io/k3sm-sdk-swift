@@ -30,6 +30,15 @@ let package = Package(
         .target(name: "K3smSDK", dependencies: ["CK3smPage"]),
         // The vendored fixtures are read from the source tree by path, not
         // bundled as resources.
-        .testTarget(name: "K3smSDKTests", dependencies: ["K3smSDK"], exclude: ["Fixtures"]),
+        .testTarget(
+            name: "K3smSDKTests",
+            dependencies: ["K3smSDK", "CK3smTestWake", "PageTestWriter"],
+            exclude: ["Fixtures"]
+        ),
+        // Test-only: a stand-in page writer the notifier tests run as a
+        // second process, and the wake call it and the tests share. Neither
+        // is a product, so a consumer of the library never builds them.
+        .target(name: "CK3smTestWake", path: "Tests/CK3smTestWake"),
+        .executableTarget(name: "PageTestWriter", dependencies: ["CK3smTestWake"], path: "Tests/PageTestWriter"),
     ]
 )

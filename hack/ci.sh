@@ -22,9 +22,13 @@
 #      digests and the reader tests decode the golden pages, give each
 #      negative page its manifest error and turn a scripted torn read into
 #      torn (they also run under the sanitizers in stage 9)
+#  12. the change notifier (integration): BudgetNotifierTests with the
+#      process-spawning test enabled, in which a writer process bumps
+#      notifyEpoch and a reader here wakes, and a seq-only change with a wake
+#      is not reported
 #
 # A stage name as the first argument runs that stage alone: --reader,
-# --sanitize, --version-check, --nodebudget, and --notifier, --stress,
+# --sanitize, --version-check, --nodebudget, --notifier, and --stress,
 # --bench-rig (placeholders until their items land).
 #
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
@@ -36,11 +40,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 stage="${1:-}"
 case "$stage" in
-	--notifier|--stress|--bench-rig)
+	--stress|--bench-rig)
 		echo "==> ${stage#--}"
 		echo "    not yet implemented"
 		exit 0 ;;
-	""|--reader|--sanitize|--version-check|--nodebudget) ;;
+	""|--reader|--sanitize|--version-check|--nodebudget|--notifier) ;;
 	*) echo "usage: hack/ci.sh [--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig]"; exit 2 ;;
 esac
 tmp="$(mktemp -d)"
@@ -101,6 +105,12 @@ run_nodebudget() {
 		--filter statusTypesCoverGoldenNodeBudgetDocuments
 }
 
+run_notifier() {
+	echo "==> change notifier (BudgetNotifierTests, integration)"
+	K3SM_SDK_INTEGRATION=1 swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+		--filter BudgetNotifierTests
+}
+
 run_reader() {
 	echo "==> budget page reader (hack/verify-fixtures.sh, BudgetPageReaderTests)"
 	bash hack/verify-fixtures.sh --self-test
@@ -114,6 +124,7 @@ case "$stage" in
 	--version-check) run_version_check; exit 0 ;;
 	--nodebudget) run_nodebudget; exit 0 ;;
 	--reader) run_reader; exit 0 ;;
+	--notifier) run_notifier; exit 0 ;;
 esac
 
 echo "==> no third-party dependencies"
@@ -230,8 +241,10 @@ run_nodebudget
 
 run_reader
 
-echo "==> placeholder stages (--notifier --stress --bench-rig)"
-for st in --notifier --stress --bench-rig; do
+run_notifier
+
+echo "==> placeholder stages (--stress --bench-rig)"
+for st in --stress --bench-rig; do
 	bash hack/ci.sh "$st" | sed 's/^/    /'
 done
 
