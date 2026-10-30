@@ -5,13 +5,14 @@ A Swift client for the node pressure and headroom API of
 Silicon. It is for Swift programs that run on a k3sm node and need to react to
 that node's resource pressure and headroom.
 
-**Status: the client API is being designed, and two parts have shipped.**
+**Status: the client API is being designed, and three parts have shipped.**
 The package carries the `NodeBudget` status types (`Sources/K3smSDK/NodeBudget`,
 Codable and parse-only, no I/O) and `BudgetPage`
 (`Sources/K3smSDK/Page`), a read-only mapping of the node budget page that
 reads a stable `BudgetSnapshot` under the writer's seqlock and reports
-failures as `BudgetError`. The change notifier and the rest of the client are
-not here yet.
+failures as `BudgetError`, and `BudgetNotifier`, which tells a reader when the
+page's level, admit, a threshold or the generation changed. The rest of the
+client is not here yet.
 
 ## Use it
 
@@ -58,6 +59,22 @@ do {
 }
 ```
 
+Follow changes. The writer bumps the page's `notifyEpoch` word only when the
+level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
+on that word across processes. `changes()` yields the current read, then one
+read per change, from one thread of its own that ends when the stream is
+cancelled. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
+call it from Swift concurrency:
+
+```swift
+let notifier = try BudgetNotifier(try BudgetPage.open(path: BudgetPage.defaultPagePath))
+for await read in notifier.changes() {
+    if case .success(let snapshot) = read {
+        print("level:", snapshot.level, "admit:", snapshot.admitOK)
+    }
+}
+```
+
 ## Build and test
 
 ```sh
@@ -65,6 +82,7 @@ swift build
 swift test
 hack/ci.sh          # the full gate
 hack/ci.sh --sanitize   # only the address, undefined-behavior and thread sanitizer runs
+hack/ci.sh --notifier   # only the notifier tests, the cross-process one included
 ```
 
 Requirements: Swift 6.0 or later as the minimum compiler (the package declares

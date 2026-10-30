@@ -16,6 +16,8 @@ limitations under the License.
 
 #include "ck3sm_page.h"
 
+#include <errno.h>
+#include <os/os_sync_wait_on_address.h>
 #include <stdatomic.h>
 
 _Static_assert(sizeof(_Atomic uint64_t) == 8, "an atomic page word is 8 bytes");
@@ -43,4 +45,14 @@ void ck3sm_page_load_words_relaxed(const void *base, size_t offset, uint64_t *ds
 
 void ck3sm_page_fence_acquire(void) {
 	atomic_thread_fence(memory_order_acquire);
+}
+
+int ck3sm_page_wait_word(const void *base, size_t offset, uint64_t expected, uint64_t timeout_ns) {
+	/* The call only reads the word; its parameter is not const-qualified. */
+	void *addr = (void *)((uintptr_t)base + offset);
+	if (os_sync_wait_on_address_with_timeout(addr, expected, sizeof(uint64_t), OS_SYNC_WAIT_ON_ADDRESS_SHARED,
+	                                         OS_CLOCK_MACH_ABSOLUTE_TIME, timeout_ns) >= 0) {
+		return 0;
+	}
+	return errno;
 }
