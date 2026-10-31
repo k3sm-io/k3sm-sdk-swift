@@ -23,11 +23,13 @@ internal import CK3smPage
 
 /// A read-only mapping of the node budget page.
 ///
-/// `open(path:)` maps the page and checks its header once; `read()` copies
-/// the body under the writer's seqlock. The read path reads no environment
-/// and allocates only the snapshot's node name and arrays. A page is never
-/// renamed or truncated by its writer, so the mapping stays valid for the
-/// life of the object.
+/// `open(path:)` maps the page and checks its header; `read()` checks the
+/// header again and copies the body under the writer's seqlock. A writer
+/// that takes the page over rewrites the header in place, so the ABI minor
+/// can change under an open page and every read decodes by the header it
+/// sees. The read path reads no environment and allocates only the
+/// snapshot's node name and arrays. A page is never renamed or truncated by
+/// its writer, so the mapping stays valid for the life of the object.
 public final class BudgetPage: @unchecked Sendable {
     // @unchecked: the mapping is immutable after init and only ever read,
     // through C11 atomic loads, so sharing the object across threads is safe.
@@ -48,23 +50,25 @@ public final class BudgetPage: @unchecked Sendable {
     public let path: String
     /// The ABI major of the page (always the one this SDK reads).
     public let abiMajor: UInt16
-    /// The ABI minor of the page. A higher minor than this SDK knows is read
-    /// up to the fields this SDK knows.
-    public let abiMinor: UInt16
     /// The page's header size in bytes.
     public let headerSize: UInt32
-    /// The page's body size in bytes, the region the seqlock covers.
-    public let bodySize: UInt32
+    /// The ABI minor the page's header holds now. A higher minor than this
+    /// SDK knows is read up to the fields this SDK knows.
+    public var abiMinor: UInt16 { Self.loadHeader(base).minor }
+    /// The body size the page's header holds now, in bytes: the region the
+    /// seqlock covers.
+    public var bodySize: UInt32 { Self.loadHeader(base).body }
 
     /// The start of the mapping; the notifier waits on a word of it.
     let base: UnsafeRawPointer
     private let length: Int
 
-    private init(path: String, base: UnsafeRawPointer, length: Int, header: (UInt16, UInt16, UInt32, UInt32)) {
+    private init(path: String, base: UnsafeRawPointer, length: Int) {
         self.path = path
         self.base = base
         self.length = length
-        (abiMajor, abiMinor, headerSize, bodySize) = header
+        abiMajor = PageLayout.abiMajor
+        headerSize = UInt32(PageLayout.headerSize)
     }
 
     deinit {
@@ -84,34 +88,49 @@ public final class BudgetPage: @unchecked Sendable {
         guard let m = mmap(nil, length, PROT_READ, MAP_SHARED, fd, 0), m != MAP_FAILED else {
             throw .notFound(errno: errno)
         }
-        let p = UnsafeRawPointer(m)
-        let header: (UInt16, UInt16, UInt32, UInt32)
-        do {
-            header = try checkHeader(p, length: length)
-        } catch {
-            _ = munmap(m, length)
-            throw error
-        }
-        return BudgetPage(path: path, base: p, length: length, header: header)
+        let page = BudgetPage(path: path, base: UnsafeRawPointer(m), length: length)
+        // On a failure the page deinitializes and unmaps.
+        _ = try page.loadCheckedHeader()
+        return page
     }
 
-    /// The header checks, in the contract's order. The header line is
-    /// constant once the writer has formatted the page.
-    private static func checkHeader(_ p: UnsafeRawPointer, length: Int) throws(BudgetError)
-        -> (UInt16, UInt16, UInt32, UInt32)
-    {
-        for (i, b) in PageLayout.magic.enumerated() where p.load(fromByteOffset: i, as: UInt8.self) != b {
+    /// The three words of the header line: the magic, the word holding the
+    /// major, the minor and the header size, and the word holding the body
+    /// size. A writer stores each with one 8-byte store.
+    private struct Header: Equatable {
+        var magic: UInt64
+        var versions: UInt64
+        var sizes: UInt64
+
+        var major: UInt16 { UInt16(truncatingIfNeeded: versions) }
+        var minor: UInt16 { UInt16(truncatingIfNeeded: versions >> 16) }
+        var header: UInt32 { UInt32(truncatingIfNeeded: versions >> 32) }
+        var body: UInt32 { UInt32(truncatingIfNeeded: sizes) }
+    }
+
+    private static let magicWord: UInt64 = PageLayout.magic.reversed().reduce(0) { $0 << 8 | UInt64($1) }
+
+    private static func loadHeader(_ base: UnsafeRawPointer) -> Header {
+        Header(
+            magic: ck3sm_page_load_relaxed(base, 0),
+            versions: ck3sm_page_load_relaxed(base, PageLayout.abiMajorOffset),
+            sizes: ck3sm_page_load_relaxed(base, PageLayout.bodySizeOffset))
+    }
+
+    /// The header checks, in the contract's order.
+    private func check(_ h: Header) throws(BudgetError) {
+        guard h.magic == Self.magicWord, h.major == PageLayout.abiMajor, h.header == PageLayout.headerSize else {
             throw .abiMismatch
         }
-        let major = UInt16(littleEndian: p.loadUnaligned(fromByteOffset: PageLayout.abiMajorOffset, as: UInt16.self))
-        let minor = UInt16(littleEndian: p.loadUnaligned(fromByteOffset: PageLayout.abiMinorOffset, as: UInt16.self))
-        let header = UInt32(littleEndian: p.loadUnaligned(fromByteOffset: PageLayout.headerSizeOffset, as: UInt32.self))
-        let body = UInt32(littleEndian: p.loadUnaligned(fromByteOffset: PageLayout.bodySizeOffset, as: UInt32.self))
-        guard major == PageLayout.abiMajor, header == PageLayout.headerSize else { throw .abiMismatch }
-        guard Int(body) >= PageLayout.requiredBodySize(minor: minor), length >= Int(header) + Int(body) else {
+        guard Int(h.body) >= PageLayout.requiredBodySize(minor: h.minor), length >= Int(h.header) + Int(h.body) else {
             throw .truncated
         }
-        return (major, minor, header, body)
+    }
+
+    private func loadCheckedHeader() throws(BudgetError) -> Header {
+        let h = Self.loadHeader(base)
+        try check(h)
+        return h
     }
 
     /// Reads a stable snapshot of the page, checked for staleness against
@@ -128,30 +147,40 @@ public final class BudgetPage: @unchecked Sendable {
     }
 
     /// The seqlock read, through the C11 primitives of CK3smPage: seq loaded
-    /// acquiring (odd: the writer is mid-write, try again), every body word
-    /// loaded relaxed into a local copy, an acquiring fence, seq reloaded
-    /// relaxed and compared. After `PageLayout.readerRetries` attempts the
+    /// acquiring (odd: the writer is mid-write, try again), the header line
+    /// loaded and checked, the body words of the header's minor loaded
+    /// relaxed into a local copy, an acquiring fence, then seq and the
+    /// header reloaded relaxed and compared. A header that changed during
+    /// the attempt retries it, so the body is always decoded by the header
+    /// it was copied under. After `PageLayout.readerRetries` attempts the
     /// read is torn. `afterAttempt` runs after each attempt's loads and
-    /// before its fence and second seq load, with the attempt number; tests
+    /// before its fence and second loads, with the attempt number; tests
     /// script a writer through it.
     func read(now: Int64, afterAttempt: (Int) -> Void) -> Result<BudgetSnapshot, BudgetError> {
-        // Only the words of the page's own minor are covered by its seqlock;
-        // a minor-0 page's body ends before the minor-1 fields.
-        let words = abiMinor >= 1 ? PageLayout.bodyWords : PageLayout.minor0BodySize / 8
-        return withUnsafeTemporaryAllocation(of: UInt64.self, capacity: words) { buf in
+        withUnsafeTemporaryAllocation(of: UInt64.self, capacity: PageLayout.bodyWords) { buf in
             for attempt in 0..<PageLayout.readerRetries {
                 let s1 = ck3sm_page_load_acquire(base, PageLayout.seq)
                 if s1 & 1 == 1 {
                     afterAttempt(attempt)
                     continue
                 }
+                let h1: Header
+                do throws(BudgetError) {
+                    h1 = try loadCheckedHeader()
+                } catch {
+                    return .failure(error)
+                }
+                // Only the words of the page's own minor are covered by its
+                // seqlock; a minor-0 page's body ends before the minor-1
+                // fields.
+                let words = PageLayout.requiredBodySize(minor: h1.minor) / 8
                 ck3sm_page_load_words_relaxed(base, PageLayout.headerSize, buf.baseAddress, words)
                 afterAttempt(attempt)
                 ck3sm_page_fence_acquire()
                 let s2 = ck3sm_page_load_relaxed(base, PageLayout.seq)
-                guard s1 == s2 else { continue }
+                guard s1 == s2, Self.loadHeader(base) == h1 else { continue }
                 let epoch = ck3sm_page_load_relaxed(base, PageLayout.notifyEpoch)
-                return PageDecoder(words: UnsafeBufferPointer(buf), minor: abiMinor)
+                return PageDecoder(words: UnsafeBufferPointer(rebasing: buf[0..<words]), minor: h1.minor)
                     .snapshot(seq: s1, notifyEpoch: epoch, now: now)
             }
             return .failure(.torn)

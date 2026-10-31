@@ -93,6 +93,27 @@ private final class ScratchPage {
 
     func store(_ offset: Int, _ value: UInt64) { word(offset).pointee.store(value, ordering: .releasing) }
     func load(_ offset: Int) -> UInt64 { word(offset).pointee.load(ordering: .acquiring) }
+
+    /// Rewrites the header line in place, as a writer's Resume does: the
+    /// body size word first, then the word holding the ABI minor.
+    func setHeader(minor: UInt16, bodySize: UInt32) {
+        store(PageLayout.bodySizeOffset, load(PageLayout.bodySizeOffset) & ~0xFFFF_FFFF | UInt64(bodySize))
+        let versions = load(PageLayout.abiMajorOffset) & ~(0xFFFF << 16) | UInt64(minor) << 16
+        store(PageLayout.abiMajorOffset, versions)
+    }
+}
+
+/// A page with the given header line.
+private func scratchPage(minor: UInt16, bodySize: Int) throws -> ScratchPage {
+    try ScratchPage(copying: "darwin.v1.page") { base in
+        base.storeBytes(of: minor.littleEndian, toByteOffset: PageLayout.abiMinorOffset, as: UInt16.self)
+        base.storeBytes(of: UInt32(bodySize).littleEndian, toByteOffset: PageLayout.bodySizeOffset, as: UInt32.self)
+    }
+}
+
+/// Whether every minor-1 capacity field of `c` reads as absent.
+private func minor1Absent(_ c: NodeBudget.Capacity) -> Bool {
+    c.cpuPerformanceCores == nil && c.cpuEfficiencyCores == nil && c.gpuPresent == nil && c.gpuCount == nil
 }
 
 // MARK: - the expected snapshots, from the status goldens
@@ -387,6 +408,93 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         let want = try #require(try expectedFixtures()["darwin.v1.page"])
         let s = try BudgetPage.open(path: later.path).read(now: want.observedAt).get()
         #expect(s.capacity == want.capacity)
+    }
+
+    /// The decoder cases at the edges of the minors: a page of a later minor
+    /// must carry at least the known body, and a minor-0 page whose body is
+    /// as long as the known one still reads the minor-1 fields as absent.
+    @Test func bodySizeEdgesOfTheMinors() throws {
+        for body in [PageLayout.minor0BodySize, PageLayout.knownBodySize - 8] {
+            let later = try scratchPage(minor: 2, bodySize: body)
+            #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: later.path) }
+        }
+        let long0 = try scratchPage(minor: 0, bodySize: PageLayout.knownBodySize)
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        let s = try BudgetPage.open(path: long0.path).read(now: now).get()
+        #expect(minor1Absent(s.capacity))
+        #expect(s.capacity.memCapacityBytes != nil)
+    }
+
+    /// The writer rewrites the header in place when it takes the page over,
+    /// so an open page follows the header on every read: an upgrade from
+    /// minor 0 to 1 shows the new fields, a rollback from 1 to 0 hides them
+    /// and never decodes the bytes past the minor-0 body.
+    @Test func readFollowsAHeaderRewrite() throws {
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+
+        let up = try scratchPage(minor: 0, bodySize: PageLayout.minor0BodySize)
+        let upPage = try BudgetPage.open(path: up.path)
+        #expect(minor1Absent(try upPage.read(now: now).get().capacity))
+        up.setHeader(minor: 1, bodySize: UInt32(PageLayout.knownBodySize))
+        #expect(upPage.abiMinor == 1)
+        #expect(upPage.bodySize == UInt32(PageLayout.knownBodySize))
+        let upgraded = try upPage.read(now: now).get().capacity
+        #expect(upgraded.cpuPerformanceCores == 4)
+        #expect(upgraded.gpuPresent == true)
+
+        let down = try ScratchPage(copying: "darwin.v1.page")
+        let downPage = try BudgetPage.open(path: down.path)
+        #expect(try downPage.read(now: now).get().capacity.gpuPresent == true)
+        down.setHeader(minor: 0, bodySize: UInt32(PageLayout.minor0BodySize))
+        // A value no reader may decode: gpuPresent out of its domain.
+        down.store(PageLayout.gpuPresent, 2)
+        #expect(downPage.abiMinor == 0)
+        let rolledBack = try downPage.read(now: now).get().capacity
+        #expect(minor1Absent(rolledBack))
+        #expect(rolledBack.memCapacityBytes != nil)
+
+        // A header that becomes invalid fails the next read.
+        down.setHeader(minor: 2, bodySize: UInt32(PageLayout.minor0BodySize))
+        #expect(throws: BudgetError.truncated) { try downPage.read(now: now).get() }
+    }
+
+    /// A header rewritten during an attempt is not mixed with the body that
+    /// attempt copied: the read retries and decodes by the new header.
+    @Test func headerRewriteDuringAnAttemptRetries() throws {
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        let scratch = try scratchPage(minor: 0, bodySize: PageLayout.minor0BodySize)
+        let page = try BudgetPage.open(path: scratch.path)
+        var seen: [Int] = []
+        let s = try page.read(now: now) { attempt in
+            seen.append(attempt)
+            if attempt == 0 { scratch.setHeader(minor: 1, bodySize: UInt32(PageLayout.knownBodySize)) }
+        }.get()
+        #expect(seen == [0, 1])
+        #expect(s.capacity.gpuPresent == true)
+    }
+
+    /// The seqlock bound holds on a minor-0 page as on the known minor.
+    @Test func scriptedTornReadIsTornAtMinor0() throws {
+        let scratch = try scratchPage(minor: 0, bodySize: PageLayout.minor0BodySize)
+        let page = try BudgetPage.open(path: scratch.path)
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        var attempts = 0
+        let torn = page.read(now: now) { _ in
+            attempts += 1
+            scratch.store(PageLayout.seq, scratch.load(PageLayout.seq) + 2)
+        }
+        #expect(throws: BudgetError.torn) { try torn.get() }
+        #expect(attempts == PageLayout.readerRetries)
+
+        let level = PageLayout.level
+        let s = try page.read(now: now) { attempt in
+            if attempt == 0 {
+                scratch.store(level, 3) // critical, under a new seq
+                scratch.store(PageLayout.seq, scratch.load(PageLayout.seq) + 2)
+            }
+        }.get()
+        #expect(s.level == .critical)
+        #expect(minor1Absent(s.capacity))
     }
 
     /// gpuPresent holds 0, 1 or the absent sentinel; anything else is corrupt.
