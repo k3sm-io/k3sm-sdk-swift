@@ -94,12 +94,19 @@ private final class ScratchPage {
     func store(_ offset: Int, _ value: UInt64) { word(offset).pointee.store(value, ordering: .releasing) }
     func load(_ offset: Int) -> UInt64 { word(offset).pointee.load(ordering: .acquiring) }
 
-    /// Rewrites the header line in place, as a writer's Resume does: the
-    /// body size word first, then the word holding the ABI minor.
+    /// Rewrites the header line in place, in a writer's resume order: the
+    /// word holding the ABI minor first when the body shrinks, the body
+    /// size word first when it grows or stays.
     func setHeader(minor: UInt16, bodySize: UInt32) {
-        store(PageLayout.bodySizeOffset, load(PageLayout.bodySizeOffset) & ~0xFFFF_FFFF | UInt64(bodySize))
+        let sizes = load(PageLayout.bodySizeOffset) & ~0xFFFF_FFFF | UInt64(bodySize)
         let versions = load(PageLayout.abiMajorOffset) & ~(0xFFFF << 16) | UInt64(minor) << 16
-        store(PageLayout.abiMajorOffset, versions)
+        if UInt64(bodySize) < load(PageLayout.bodySizeOffset) & 0xFFFF_FFFF {
+            store(PageLayout.abiMajorOffset, versions)
+            store(PageLayout.bodySizeOffset, sizes)
+        } else {
+            store(PageLayout.bodySizeOffset, sizes)
+            store(PageLayout.abiMajorOffset, versions)
+        }
     }
 }
 
@@ -471,6 +478,58 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         }.get()
         #expect(seen == [0, 1])
         #expect(s.capacity.gpuPresent == true)
+    }
+
+    /// A rollback (a minor-0 writer resuming a minor-1 page) that lands
+    /// between the reader's load of the minor and its load of the body size
+    /// pairs minor 1 with the minor-0 body, which is too short for it. The
+    /// read loads the header again and reads the minor-0 page.
+    @Test func rollbackBetweenHeaderLoadsRereadsTheHeader() throws {
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        let scratch = try ScratchPage(copying: "darwin.v1.page")
+        let page = try BudgetPage.open(path: scratch.path)
+        var loads = 0
+        let s = try page.read(now: now, afterAttempt: { _ in }, betweenHeaderLoads: {
+            if loads == 0 { scratch.setHeader(minor: 0, bodySize: UInt32(PageLayout.minor0BodySize)) }
+            loads += 1
+        }).get()
+        #expect(loads == 2)
+        #expect(minor1Absent(s.capacity))
+        #expect(s.capacity.memCapacityBytes != nil)
+        #expect(page.abiMinor == 0)
+    }
+
+    /// The stale pairing on every header load but the last still reads; a
+    /// header that stays invalid is reported after exactly the bound.
+    @Test func headerRereadIsBounded() throws {
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        let scratch = try scratchPage(minor: 0, bodySize: PageLayout.minor0BodySize)
+        let page = try BudgetPage.open(path: scratch.path)
+        let versions = scratch.load(PageLayout.abiMajorOffset)
+        let stale = versions & ~(0xFFFF << 16) | 1 << 16
+        var loads = 0
+        // The minor word reads 1 at every load but the last; the body stays
+        // minor 0's. Each hook sets the word the next header load reads.
+        scratch.store(PageLayout.abiMajorOffset, stale)
+        let s = try page.read(now: now, afterAttempt: { _ in }, betweenHeaderLoads: {
+            loads += 1
+            scratch.store(PageLayout.abiMajorOffset, loads < PageLayout.headerRetries - 1 ? stale : versions)
+        }).get()
+        #expect(loads == PageLayout.headerRetries)
+        #expect(minor1Absent(s.capacity))
+
+        scratch.store(PageLayout.abiMajorOffset, stale)
+        loads = 0
+        let truncated = page.read(now: now, afterAttempt: { _ in }, betweenHeaderLoads: { loads += 1 })
+        #expect(throws: BudgetError.truncated) { try truncated.get() }
+        #expect(loads == PageLayout.headerRetries)
+
+        scratch.store(PageLayout.abiMajorOffset, versions)
+        scratch.store(0, scratch.load(0) ^ 1)
+        loads = 0
+        let mismatch = page.read(now: now, afterAttempt: { _ in }, betweenHeaderLoads: { loads += 1 })
+        #expect(throws: BudgetError.abiMismatch) { try mismatch.get() }
+        #expect(loads == PageLayout.headerRetries)
     }
 
     /// The seqlock bound holds on a minor-0 page as on the known minor.

@@ -110,11 +110,15 @@ public final class BudgetPage: @unchecked Sendable {
 
     private static let magicWord: UInt64 = PageLayout.magic.reversed().reduce(0) { $0 << 8 | UInt64($1) }
 
-    private static func loadHeader(_ base: UnsafeRawPointer) -> Header {
-        Header(
-            magic: ck3sm_page_load_relaxed(base, 0),
-            versions: ck3sm_page_load_relaxed(base, PageLayout.abiMajorOffset),
-            sizes: ck3sm_page_load_relaxed(base, PageLayout.bodySizeOffset))
+    /// Loads the header line: the magic, the versions word, then the sizes
+    /// word. `betweenLoads` runs between the last two loads; tests script a
+    /// writer's resume through it.
+    private static func loadHeader(_ base: UnsafeRawPointer, betweenLoads: () -> Void = {}) -> Header {
+        let magic = ck3sm_page_load_relaxed(base, 0)
+        let versions = ck3sm_page_load_relaxed(base, PageLayout.abiMajorOffset)
+        betweenLoads()
+        let sizes = ck3sm_page_load_relaxed(base, PageLayout.bodySizeOffset)
+        return Header(magic: magic, versions: versions, sizes: sizes)
     }
 
     /// The header checks, in the contract's order.
@@ -127,10 +131,21 @@ public final class BudgetPage: @unchecked Sendable {
         }
     }
 
-    private func loadCheckedHeader() throws(BudgetError) -> Header {
-        let h = Self.loadHeader(base)
-        try check(h)
-        return h
+    /// Loads and checks the header line, loading it again while a check
+    /// fails, up to `PageLayout.headerRetries` times; then the last check's
+    /// error is the page's.
+    private func loadCheckedHeader(betweenLoads: () -> Void = {}) throws(BudgetError) -> Header {
+        var last = BudgetError.abiMismatch
+        for _ in 0..<PageLayout.headerRetries {
+            let h = Self.loadHeader(base, betweenLoads: betweenLoads)
+            do throws(BudgetError) {
+                try check(h)
+                return h
+            } catch {
+                last = error
+            }
+        }
+        throw last
     }
 
     /// Reads a stable snapshot of the page, checked for staleness against
@@ -148,7 +163,8 @@ public final class BudgetPage: @unchecked Sendable {
 
     /// The seqlock read, through the C11 primitives of CK3smPage: seq loaded
     /// acquiring (odd: the writer is mid-write, try again), the header line
-    /// loaded and checked, the body words of the header's minor loaded
+    /// loaded and checked (loaded again while a check fails, a bounded
+    /// number of times), the body words of the header's minor loaded
     /// relaxed into a local copy, an acquiring fence, then seq and the
     /// header reloaded relaxed and compared. A header that changed during
     /// the attempt retries it, so the body is always decoded by the header
@@ -157,6 +173,15 @@ public final class BudgetPage: @unchecked Sendable {
     /// before its fence and second loads, with the attempt number; tests
     /// script a writer through it.
     func read(now: Int64, afterAttempt: (Int) -> Void) -> Result<BudgetSnapshot, BudgetError> {
+        read(now: now, afterAttempt: afterAttempt, betweenHeaderLoads: {})
+    }
+
+    /// The seqlock read with `betweenHeaderLoads` run between the loads of
+    /// the versions word and the sizes word of every header load, for a
+    /// test that scripts a resume there.
+    func read(
+        now: Int64, afterAttempt: (Int) -> Void, betweenHeaderLoads: () -> Void
+    ) -> Result<BudgetSnapshot, BudgetError> {
         withUnsafeTemporaryAllocation(of: UInt64.self, capacity: PageLayout.bodyWords) { buf in
             for attempt in 0..<PageLayout.readerRetries {
                 let s1 = ck3sm_page_load_acquire(base, PageLayout.seq)
@@ -166,7 +191,7 @@ public final class BudgetPage: @unchecked Sendable {
                 }
                 let h1: Header
                 do throws(BudgetError) {
-                    h1 = try loadCheckedHeader()
+                    h1 = try loadCheckedHeader(betweenLoads: betweenHeaderLoads)
                 } catch {
                     return .failure(error)
                 }
