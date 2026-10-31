@@ -43,6 +43,13 @@ enum PageLayout {
     static let staleFactor: Int64 = 3
     /// The number of read attempts before a read is torn.
     static let readerRetries = 64
+    /// The number of times a read loads the header line before it reports
+    /// the page truncated or of another ABI. A writer taking the page over
+    /// rewrites the minor word and the body size word with two stores, in
+    /// an order that keeps every header it leaves valid; a reader loads
+    /// them with two loads, so it can pair the old minor with the new body
+    /// size, and a reload sees a header the writer stored.
+    static let headerRetries = 64
 
     // Header line.
     static let abiMajorOffset = 8
