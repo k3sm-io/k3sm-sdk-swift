@@ -18,18 +18,22 @@ limitations under the License.
 #error("the budget page is little-endian; a big-endian host cannot read it")
 #endif
 
-/// The page ABI this reader knows: major 1, minor 0. Every offset is a byte
-/// offset from the start of the page file. The apis layout descriptor
-/// (layout.v1.0.txt) is the authority; a test checks `fields` against it
-/// line for line.
+/// The page ABI this reader knows: major 1, minor 1. Every offset is a byte
+/// offset from the start of the page file. The apis layout descriptors
+/// (layout.v1.0.txt, layout.v1.1.txt) are the authority; a test checks
+/// `fields` against them line for line. A minor only appends fields, so the
+/// minor-0 layout is a prefix of the minor-1 layout.
 enum PageLayout {
     static let abiMajor: UInt16 = 1
-    static let abiMinor: UInt16 = 0
+    static let abiMinor: UInt16 = 1
     static let pageSize = 4096
     static let headerSize = 192
     /// The body size of the known minor: a page of a higher minor is read up
     /// to here and no further.
-    static let knownBodySize = 2120
+    static let knownBodySize = 2152
+    /// The body size of minor 0, the smallest body a page of this major has.
+    /// A minor-0 page carries none of the minor-1 fields.
+    static let minor0BodySize = 2120
     static let bodyWords = knownBodySize / 8
     static let magic: [UInt8] = Array("K3SMBDGT".utf8)
     static let absent = Int64.min
@@ -100,6 +104,18 @@ enum PageLayout {
         "band", "evictionsTotal", "oomKillsTotal", "kernelKillsTotal", "restartsTotal",
         "memHighEventsTotal", "tier1RefusedTotal",
     ]
+    // Minor 1: the CPU core split and the GPU presence, after the counters.
+    // gpuPresent is an i64 holding 0 or 1, or the absent sentinel.
+    static let cpuPerformanceCores = 2312
+    static let cpuEfficiencyCores = 2320
+    static let gpuPresent = 2328
+    static let gpuCount = 2336
+
+    /// The body size a page of `minor` must carry: the end of the last field
+    /// of that minor, or of the known minor when the page's is higher.
+    static func requiredBodySize(minor: UInt16) -> Int {
+        minor >= 1 ? knownBodySize : minor0BodySize
+    }
 
     /// The code tables: the value at index i has code i + 1, and code 0 is
     /// unset. The order is the apis manifest's.
@@ -192,6 +208,10 @@ enum PageLayout {
                     "counters[\(c)].\(n)")
             }
         }
+        add(cpuPerformanceCores, 8, "i64", true, nil, "capacity.cpuPerformanceCores")
+        add(cpuEfficiencyCores, 8, "i64", true, nil, "capacity.cpuEfficiencyCores")
+        add(gpuPresent, 8, "i64", true, "bool", "capacity.gpuPresent")
+        add(gpuCount, 8, "i64", true, nil, "capacity.gpuCount")
         return f
     }
 }

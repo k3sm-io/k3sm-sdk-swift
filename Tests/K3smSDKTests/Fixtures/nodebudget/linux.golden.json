@@ -16,7 +16,9 @@
       "memCapacityBytes": 34359738368,
       "memAllocatableBytes": 32212254720,
       "swapTotalBytes": 0,
-      "swapUsedBytes": 0
+      "swapUsedBytes": 0,
+      "gpuPresent": false,
+      "gpuCount": 0
     },
     "signals": [
       {

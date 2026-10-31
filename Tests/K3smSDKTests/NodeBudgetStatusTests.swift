@@ -389,3 +389,32 @@ func bareStatusShape() throws {
     }
     #expect(throws: NodeBudgetDecodeError.notJSON) { try NodeBudgetDecoder.decodeStatus(Data("{".utf8)) }
 }
+
+@Test("the CPU core split and the GPU presence decode, and are nil on an object without them")
+func capacityCoreSplitAndGPU() throws {
+    let darwin = try #require(try NodeBudgetDecoder.decodeBudget(golden("darwin.golden.json")).status?.capacity)
+    #expect(darwin.cpuPerformanceCores == 4)
+    #expect(darwin.cpuEfficiencyCores == 4)
+    #expect(darwin.gpuPresent == true)
+    #expect(darwin.gpuCount == 1)
+
+    let linux = try #require(try NodeBudgetDecoder.decodeBudget(golden("linux.golden.json")).status?.capacity)
+    #expect(linux.cpuPerformanceCores == nil)
+    #expect(linux.cpuEfficiencyCores == nil)
+    #expect(linux.gpuPresent == false)
+    #expect(linux.gpuCount == 0)
+
+    let older = try darwinWithStatus { status in
+        var capacity = status["capacity"] as? [String: Any] ?? [:]
+        for key in ["cpuPerformanceCores", "cpuEfficiencyCores", "gpuPresent", "gpuCount"] {
+            capacity.removeValue(forKey: key)
+        }
+        status["capacity"] = capacity
+    }
+    let before = try #require(try NodeBudgetDecoder.decodeBudget(older).status?.capacity)
+    #expect(before.cpuPerformanceCores == nil)
+    #expect(before.cpuEfficiencyCores == nil)
+    #expect(before.gpuPresent == nil)
+    #expect(before.gpuCount == nil)
+    #expect(before.memCapacityBytes == darwin.memCapacityBytes)
+}
