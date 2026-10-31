@@ -18,7 +18,11 @@
       "memEvictionReserveBytes": 536870912,
       "memAllocatableBytes": 14495514624,
       "swapTotalBytes": 4294967296,
-      "swapUsedBytes": 1073741824
+      "swapUsedBytes": 1073741824,
+      "cpuPerformanceCores": 4,
+      "cpuEfficiencyCores": 4,
+      "gpuPresent": true,
+      "gpuCount": 1
     },
     "signals": [
       {

@@ -20,10 +20,11 @@ import Foundation
 import Synchronization
 import Testing
 
-// The page fixtures are vendored byte for byte from apis@27bfab5
+// The page fixtures are vendored byte for byte from apis@6dcc98a
 // budget/v1alpha1/testdata/page and checked against their SHA256SUMS by
-// hack/verify-fixtures.sh. manifest.json and layout.v1.0.txt are the
-// authority for every constant and offset below.
+// hack/verify-fixtures.sh. manifest.json and layout.v1.1.txt are the
+// authority for every constant and offset below; layout.v1.0.txt is the
+// frozen minor-0 prefix of it.
 
 // MARK: - fixtures
 
@@ -47,9 +48,9 @@ private func statusGolden(_ name: String) throws -> NodeBudget {
     try NodeBudgetDecoder.decodeBudget(Data(contentsOf: statusDir.appendingPathComponent(name)))
 }
 
-/// The layout descriptor's field lines.
-private func layoutLines() throws -> [PageLayout.Field] {
-    let text = try String(contentsOf: pageDir.appendingPathComponent("layout.v1.0.txt"), encoding: .utf8)
+/// The field lines of a layout descriptor, the known minor's by default.
+private func layoutLines(_ file: String = "layout.v1.1.txt") throws -> [PageLayout.Field] {
+    let text = try String(contentsOf: pageDir.appendingPathComponent(file), encoding: .utf8)
     return try text.split(separator: "\n").filter { !$0.hasPrefix("#") }.map { line in
         let p = line.split(separator: " ").map(String.init)
         try #require(p.count == 6, "layout line: \(line)")
@@ -161,6 +162,9 @@ private func i64Fields(_ s: BudgetSnapshot) -> [String: Int64?] {
         c.cpuCapacityMilli, c.cpuSystemReserveMilli, c.memCapacityBytes, c.memSystemReserveBytes,
         c.memEvictionReserveBytes, c.memAllocatableBytes, c.swapTotalBytes, c.swapUsedBytes,
     ]) { m["capacity." + n] = v }
+    m["capacity.cpuPerformanceCores"] = c.cpuPerformanceCores
+    m["capacity.cpuEfficiencyCores"] = c.cpuEfficiencyCores
+    m["capacity.gpuCount"] = c.gpuCount
     let d = s.darwin
     for (n, v) in zip(PageLayout.darwinNames, [
         d?.vmPressureLevel, d?.memorystatusLevelPermille, d?.compressor?.bytesUsed, d?.compressor?.bytesStored,
@@ -256,6 +260,14 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         }
         let end = try #require(want.last).offset + 8
         #expect(end == PageLayout.headerSize + PageLayout.knownBodySize)
+
+        // Minor 0 is a line prefix of minor 1, and ends at the minor-0 body.
+        let v10 = try layoutLines("layout.v1.0.txt")
+        #expect(Array(have.prefix(v10.count)) == v10)
+        #expect(try #require(v10.last).offset + 8 == PageLayout.headerSize + PageLayout.minor0BodySize)
+        #expect(PageLayout.requiredBodySize(minor: 0) == PageLayout.minor0BodySize)
+        #expect(PageLayout.requiredBodySize(minor: 1) == PageLayout.knownBodySize)
+        #expect(PageLayout.requiredBodySize(minor: 7) == PageLayout.knownBodySize)
     }
 
     /// The gate test: every decodable golden page reads to the snapshot its
@@ -271,9 +283,9 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
             let decodes = try #require(f["decodes"] as? Bool)
             let page = try BudgetPage.open(path: fixturePath(file))
             #expect(page.abiMajor == 1)
-            #expect(page.abiMinor == 0)
+            #expect(page.abiMinor == 1)
             #expect(page.headerSize == 192)
-            #expect(page.bodySize == 2120)
+            #expect(page.bodySize == 2152)
             guard decodes else {
                 #expect(throws: BudgetError.self) { try page.read(now: 0).get() }
                 continue
@@ -307,12 +319,83 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(s.counters.count == PageLayout.counterSlots)
         let fields = i64Fields(s)
         var checked = 0
-        for f in layout where f.kind == "i64" && f.name != "writerPeriodSeconds" {
+        #expect(s.capacity.gpuPresent == true)
+        for f in layout where f.kind == "i64" && f.enumName == nil && f.name != "writerPeriodSeconds" {
             let v = try #require(fields[f.name], "no snapshot field for \(f.name)")
             #expect(v == Int64(bitPattern: pattern(f.offset)), "\(f.name) at \(f.offset)")
             checked += 1
         }
-        #expect(checked == layout.filter { $0.kind == "i64" }.count - 1)
+        #expect(checked == layout.filter { $0.kind == "i64" && $0.enumName == nil }.count - 1)
+    }
+
+    /// The minor-1 capacity fields read from the goldens, and are nil on the
+    /// page with every optional absent.
+    @Test func readerReadsCoreSplitAndGPU() throws {
+        let darwin = try readFixture("darwin.v1.page").get().capacity
+        #expect(darwin.cpuPerformanceCores == 4)
+        #expect(darwin.cpuEfficiencyCores == 4)
+        #expect(darwin.gpuPresent == true)
+        #expect(darwin.gpuCount == 1)
+        let linux = try readFixture("linux-producer.v1.page").get().capacity
+        #expect(linux.cpuPerformanceCores == nil)
+        #expect(linux.cpuEfficiencyCores == nil)
+        #expect(linux.gpuPresent == false)
+        #expect(linux.gpuCount == 0)
+        let absent = try readFixture("absent.v1.page").get().capacity
+        #expect(absent == NodeBudget.Capacity())
+    }
+
+    /// A minor-0 page: its body ends before the minor-1 fields, which read as
+    /// nil whatever the bytes past its body hold; every other field reads as
+    /// on the minor-1 page.
+    @Test func readerReadsMinor0Page() throws {
+        let scratch = try ScratchPage(copying: "darwin.v1.page") { base in
+            base.storeBytes(of: UInt16(0).littleEndian, toByteOffset: PageLayout.abiMinorOffset, as: UInt16.self)
+            base.storeBytes(of: UInt32(PageLayout.minor0BodySize).littleEndian,
+                            toByteOffset: PageLayout.bodySizeOffset, as: UInt32.self)
+        }
+        let page = try BudgetPage.open(path: scratch.path)
+        #expect(page.abiMinor == 0)
+        #expect(page.bodySize == 2120)
+        var want = try #require(try expectedFixtures()["darwin.v1.page"])
+        let got = try page.read(now: want.observedAt).get()
+        want.seq = got.seq
+        want.notifyEpoch = got.notifyEpoch
+        want.capacity.cpuPerformanceCores = nil
+        want.capacity.cpuEfficiencyCores = nil
+        want.capacity.gpuPresent = nil
+        want.capacity.gpuCount = nil
+        #expect(got == want)
+        #expect(got.capacity.memCapacityBytes != nil)
+    }
+
+    /// A minor-0 page shorter than the minor-0 body is truncated; a page of
+    /// a higher minor than this SDK knows reads its known fields.
+    @Test func bodySizeFollowsTheMinor() throws {
+        let short = try ScratchPage(copying: "darwin.v1.page") { base in
+            base.storeBytes(of: UInt16(0).littleEndian, toByteOffset: PageLayout.abiMinorOffset, as: UInt16.self)
+            base.storeBytes(of: UInt32(PageLayout.minor0BodySize - 8).littleEndian,
+                            toByteOffset: PageLayout.bodySizeOffset, as: UInt32.self)
+        }
+        #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: short.path) }
+
+        let later = try ScratchPage(copying: "darwin.v1.page") { base in
+            base.storeBytes(of: UInt16(2).littleEndian, toByteOffset: PageLayout.abiMinorOffset, as: UInt16.self)
+            base.storeBytes(of: UInt32(PageLayout.knownBodySize + 64).littleEndian,
+                            toByteOffset: PageLayout.bodySizeOffset, as: UInt32.self)
+        }
+        let want = try #require(try expectedFixtures()["darwin.v1.page"])
+        let s = try BudgetPage.open(path: later.path).read(now: want.observedAt).get()
+        #expect(s.capacity == want.capacity)
+    }
+
+    /// gpuPresent holds 0, 1 or the absent sentinel; anything else is corrupt.
+    @Test func gpuPresentOutOfDomainIsCorrupt() throws {
+        let scratch = try ScratchPage(copying: "darwin.v1.page") { base in
+            base.storeBytes(of: UInt64(2).littleEndian, toByteOffset: PageLayout.gpuPresent, as: UInt64.self)
+        }
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        #expect(throws: BudgetError.corrupt) { try BudgetPage.open(path: scratch.path).read(now: now).get() }
     }
 
     @Test func negativePagesGiveManifestErrors() throws {

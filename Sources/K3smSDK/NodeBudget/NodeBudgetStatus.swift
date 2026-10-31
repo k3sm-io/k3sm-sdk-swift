@@ -84,11 +84,24 @@ extension NodeBudget {
         public var swapTotalBytes: Int64?
         /// Swap in use, in bytes.
         public var swapUsedBytes: Int64?
+        /// Logical CPUs in the performance cluster. Nil on a host with no
+        /// performance level split, and on a page or object that predates it.
+        public var cpuPerformanceCores: Int64?
+        /// Logical CPUs in the efficiency cluster. Nil on a host with no
+        /// performance level split, and on a page or object that predates it.
+        public var cpuEfficiencyCores: Int64?
+        /// Whether the node advertises a GPU to pods. Nil when the producer
+        /// does not know, and on a page or object that predates it.
+        public var gpuPresent: Bool?
+        /// The number of GPUs the node advertises to pods, 0 when it
+        /// advertises none. Nil on a page or object that predates it.
+        public var gpuCount: Int64?
 
         /// The wire keys.
         enum CodingKeys: String, CodingKey, CaseIterable {
             case cpuCapacityMilli, cpuSystemReserveMilli, memCapacityBytes, memSystemReserveBytes
             case memEvictionReserveBytes, memAllocatableBytes, swapTotalBytes, swapUsedBytes
+            case cpuPerformanceCores, cpuEfficiencyCores, gpuPresent, gpuCount
         }
     }
 

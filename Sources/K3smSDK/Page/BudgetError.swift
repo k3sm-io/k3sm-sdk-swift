@@ -25,10 +25,11 @@ public enum BudgetError: Error, Equatable, Sendable, CustomStringConvertible {
     /// major, an unexpected header size, or a code its tables do not hold.
     case abiMismatch
     /// The file is shorter than its header and body, or its body is shorter
-    /// than the minor this SDK knows.
+    /// than its minor's fields (the known minor's, for a higher minor).
     case truncated
     /// The header is well formed but a field is outside its domain, such as
-    /// a node name longer than 253 bytes.
+    /// a node name longer than 253 bytes or a gpuPresent word other than 0,
+    /// 1 or absent.
     case corrupt
     /// No stable read: the writer kept the page busy for every attempt.
     case torn

@@ -108,7 +108,9 @@ public final class BudgetPage: @unchecked Sendable {
         let header = UInt32(littleEndian: p.loadUnaligned(fromByteOffset: PageLayout.headerSizeOffset, as: UInt32.self))
         let body = UInt32(littleEndian: p.loadUnaligned(fromByteOffset: PageLayout.bodySizeOffset, as: UInt32.self))
         guard major == PageLayout.abiMajor, header == PageLayout.headerSize else { throw .abiMismatch }
-        guard body >= PageLayout.knownBodySize, length >= Int(header) + Int(body) else { throw .truncated }
+        guard Int(body) >= PageLayout.requiredBodySize(minor: minor), length >= Int(header) + Int(body) else {
+            throw .truncated
+        }
         return (major, minor, header, body)
     }
 
@@ -133,20 +135,24 @@ public final class BudgetPage: @unchecked Sendable {
     /// before its fence and second seq load, with the attempt number; tests
     /// script a writer through it.
     func read(now: Int64, afterAttempt: (Int) -> Void) -> Result<BudgetSnapshot, BudgetError> {
-        withUnsafeTemporaryAllocation(of: UInt64.self, capacity: PageLayout.bodyWords) { buf in
+        // Only the words of the page's own minor are covered by its seqlock;
+        // a minor-0 page's body ends before the minor-1 fields.
+        let words = abiMinor >= 1 ? PageLayout.bodyWords : PageLayout.minor0BodySize / 8
+        return withUnsafeTemporaryAllocation(of: UInt64.self, capacity: words) { buf in
             for attempt in 0..<PageLayout.readerRetries {
                 let s1 = ck3sm_page_load_acquire(base, PageLayout.seq)
                 if s1 & 1 == 1 {
                     afterAttempt(attempt)
                     continue
                 }
-                ck3sm_page_load_words_relaxed(base, PageLayout.headerSize, buf.baseAddress, PageLayout.bodyWords)
+                ck3sm_page_load_words_relaxed(base, PageLayout.headerSize, buf.baseAddress, words)
                 afterAttempt(attempt)
                 ck3sm_page_fence_acquire()
                 let s2 = ck3sm_page_load_relaxed(base, PageLayout.seq)
                 guard s1 == s2 else { continue }
                 let epoch = ck3sm_page_load_relaxed(base, PageLayout.notifyEpoch)
-                return PageDecoder(words: UnsafeBufferPointer(buf)).snapshot(seq: s1, notifyEpoch: epoch, now: now)
+                return PageDecoder(words: UnsafeBufferPointer(buf), minor: abiMinor)
+                    .snapshot(seq: s1, notifyEpoch: epoch, now: now)
             }
             return .failure(.torn)
         }
@@ -156,6 +162,8 @@ public final class BudgetPage: @unchecked Sendable {
 /// Decodes a stable copy of the body words. Offsets are page offsets.
 private struct PageDecoder {
     let words: UnsafeBufferPointer<UInt64>
+    /// The page's ABI minor: the fields of a later minor read as nil.
+    let minor: UInt16
 
     func u64(_ offset: Int) -> UInt64 { UInt64(littleEndian: words[(offset - PageLayout.headerSize) / 8]) }
     func i64(_ offset: Int) -> Int64 { Int64(bitPattern: u64(offset)) }
@@ -212,10 +220,21 @@ private struct PageDecoder {
         else { throw .corrupt }
 
         let c = PageLayout.capacity
-        let capacity = NodeBudget.Capacity(
+        var capacity = NodeBudget.Capacity(
             cpuCapacityMilli: opt(c), cpuSystemReserveMilli: opt(c + 8), memCapacityBytes: opt(c + 16),
             memSystemReserveBytes: opt(c + 24), memEvictionReserveBytes: opt(c + 32),
             memAllocatableBytes: opt(c + 40), swapTotalBytes: opt(c + 48), swapUsedBytes: opt(c + 56))
+        if minor >= 1 {
+            capacity.cpuPerformanceCores = opt(PageLayout.cpuPerformanceCores)
+            capacity.cpuEfficiencyCores = opt(PageLayout.cpuEfficiencyCores)
+            switch opt(PageLayout.gpuPresent) {
+            case nil: capacity.gpuPresent = nil
+            case 0: capacity.gpuPresent = false
+            case 1: capacity.gpuPresent = true
+            default: throw .corrupt
+            }
+            capacity.gpuCount = opt(PageLayout.gpuCount)
+        }
 
         var darwin: NodeBudget.DarwinSignals?
         if platform == .darwin {
