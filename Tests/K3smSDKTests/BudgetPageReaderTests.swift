@@ -581,6 +581,24 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         }
     }
 
+    /// An intact magic does not make a page readable: a foreign header size
+    /// is refused as an ABI mismatch, and the vendored unknown-major fixture
+    /// keeps its magic intact, so it is refused for its major alone.
+    @Test func foreignHeaderSizeWithIntactMagicIsAbiMismatch() throws {
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        let scratch = try ScratchPage(copying: "darwin.v1.page") { base in
+            base.storeBytes(of: UInt32(PageLayout.headerSize + 8).littleEndian,
+                            toByteOffset: PageLayout.headerSizeOffset, as: UInt32.self)
+        }
+        #expect(throws: BudgetError.abiMismatch) { try BudgetPage.open(path: scratch.path).read(now: now).get() }
+
+        let good = try Data(contentsOf: pageDir.appendingPathComponent("darwin.v1.page"))
+        let foreign = try Data(contentsOf: pageDir.appendingPathComponent("negative/unknown-major.v1.page"))
+        #expect(foreign.prefix(PageLayout.abiMajorOffset) == good.prefix(PageLayout.abiMajorOffset))
+        #expect(foreign[PageLayout.abiMajorOffset] != good[PageLayout.abiMajorOffset])
+        #expect(throws: BudgetError.abiMismatch) { try readFixture("negative/unknown-major.v1.page").get() }
+    }
+
     @Test func notFoundCarriesErrno() {
         #expect(throws: BudgetError.notFound(errno: ENOENT)) {
             try BudgetPage.open(path: pageDir.appendingPathComponent("no-such.v1.page").path)
