@@ -596,6 +596,7 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         let foreign = try Data(contentsOf: pageDir.appendingPathComponent("negative/unknown-major.v1.page"))
         #expect(foreign.prefix(PageLayout.abiMajorOffset) == good.prefix(PageLayout.abiMajorOffset))
         #expect(foreign[PageLayout.abiMajorOffset] != good[PageLayout.abiMajorOffset])
+        #expect(throws: BudgetError.abiMismatch) { try readFixture("negative/unknown-major.v1.page").get() }
     }
 
     @Test func notFoundCarriesErrno() {
