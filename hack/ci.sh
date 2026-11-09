@@ -31,6 +31,20 @@
 # --sanitize, --version-check, --nodebudget, --notifier, and --stress,
 # --bench-rig (placeholders until their items land).
 #
+#   hack/ci.sh [<stage>] | [--packages <file> [--base <sha>]] [--dry-run]
+#
+# With no mode flag the gate is the full gate, unchanged. --packages <file> reads a
+# k3sm-affected/v1 list (the format the affected-set selector writes; the reader is
+# hack/lib/affected-mode.sh, with gate_lang=swift). No list line names a Swift
+# target, so a list never narrows the suite: a missing, unreadable, malformed or
+# unknown-version file, an @full line for k3sm-sdk-swift, an unresolved --base
+# (default: the merge base with origin/main) or any non-doc change against it runs
+# the full gate. Only when the diff holds doc files alone (*.md, docs/, LICENSE,
+# NOTICE, DCO) is every swift test run skipped (stages 2 and 9, and the swift test
+# of stages 10 to 12); every other stage runs, the fixture checks of stages 10 and
+# 11 included. --dry-run resolves the mode, prints the plan and exits before any
+# stage runs. The mode flags go with the full run only, not with a stage name.
+#
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
 # package, build and test run. SwiftPM applies its own sandbox when it compiles
 # the manifest and builds, and a process already inside a sandbox cannot apply
@@ -38,17 +52,46 @@
 # this to turn off the inner sandbox and keep its own. Unset, nothing changes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-stage="${1:-}"
+usage() { echo "usage: hack/ci.sh [--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig] | [--packages <file> [--base <sha>]] [--dry-run]"; exit 2; }
+stage=""
+pkg_file="" pkg_file_set=0 diff_base="" dry_run=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig)
+			[ -z "$stage" ] || usage; stage="$1"; shift ;;
+		--packages) [ $# -ge 2 ] || usage; pkg_file="$2"; pkg_file_set=1; shift 2 ;;
+		--base) [ $# -ge 2 ] && [ -n "$2" ] || usage; diff_base="$2"; shift 2 ;;
+		--dry-run) dry_run=1; shift ;;
+		*) usage ;;
+	esac
+done
+if [ -n "$diff_base" ] && [ "$pkg_file_set" = 0 ]; then
+	echo "hack/ci.sh: --base goes with --packages" >&2; exit 2
+fi
+if [ -n "$stage" ] && { [ "$pkg_file_set" = 1 ] || [ "$dry_run" = 1 ]; }; then
+	echo "hack/ci.sh: --packages and --dry-run go with the full run only" >&2; exit 2
+fi
 case "$stage" in
 	--stress|--bench-rig)
 		echo "==> ${stage#--}"
 		echo "    not yet implemented"
 		exit 0 ;;
-	""|--reader|--sanitize|--version-check|--nodebudget|--notifier) ;;
-	*) echo "usage: hack/ci.sh [--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig]"; exit 2 ;;
 esac
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+
+# The --packages mode lives in hack/lib/affected-mode.sh, which defines read_packages
+# and resolve_gate_mode and carries the k3sm-affected/v1 grammar; these are the
+# variables that make it this repository's. A Swift gate has no module to narrow to:
+# test_set is ./... (every swift test runs) or empty (doc-only change: all skipped).
+ci_tmp="$tmp"
+gate_repo=k3sm-sdk-swift
+gate_lang=swift
+# shellcheck source=hack/lib/affected-mode.sh
+. hack/lib/affected-mode.sh
+resolve_gate_mode
+# run_tests: whether the swift test runs go ahead (no doc-only skip).
+run_tests() { [ ${#test_set[@]} -gt 0 ]; }
 
 for tool in swift git; do
 	command -v "$tool" >/dev/null || { echo "FAIL: $tool is not installed"; exit 1; }
@@ -84,6 +127,11 @@ ubsan_lib="$ubsan_dir/libclang_rt.ubsan_osx_dynamic.dylib"
 UBSAN_FLAGS=(-Xlinker "$ubsan_lib" -Xlinker -rpath -Xlinker "$ubsan_dir")
 
 run_sanitizers() {
+	if ! run_tests; then
+		echo "==> swift test --sanitize (ASan, UBSan, TSan)"
+		echo "    skipped (no affected target)"
+		return 0
+	fi
 	echo "==> swift test --sanitize=address,undefined (ASan, UBSan)"
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=address
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=undefined \
@@ -101,12 +149,14 @@ run_nodebudget() {
 	echo "==> NodeBudget fixtures and status types (hack/verify-fixtures.sh)"
 	bash hack/verify-fixtures.sh --self-test
 	bash hack/verify-fixtures.sh
+	if ! run_tests; then echo "    swift test skipped (no affected target)"; return 0; fi
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
 		--filter statusTypesCoverGoldenNodeBudgetDocuments
 }
 
 run_notifier() {
 	echo "==> change notifier (BudgetNotifierTests, integration)"
+	if ! run_tests; then echo "    skipped (no affected target)"; return 0; fi
 	K3SM_SDK_INTEGRATION=1 swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
 		--filter BudgetNotifierTests
 }
@@ -115,6 +165,7 @@ run_reader() {
 	echo "==> budget page reader (hack/verify-fixtures.sh, BudgetPageReaderTests)"
 	bash hack/verify-fixtures.sh --self-test
 	bash hack/verify-fixtures.sh "$PWD/Tests/K3smSDKTests/Fixtures/page"
+	if ! run_tests; then echo "    swift test skipped (no affected target)"; return 0; fi
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
 		--filter BudgetPageReaderTests
 }
@@ -143,7 +194,11 @@ echo "==> swift build"
 swift build ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"}
 
 echo "==> swift test"
-swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"}
+if run_tests; then
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"}
+else
+	echo "    skipped (no affected target)"
+fi
 
 echo "==> a consumer pinning this checkout by revision"
 # A git repository holding this checkout's files as they are (tracked and
