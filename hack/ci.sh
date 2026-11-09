@@ -102,6 +102,8 @@ ci_json_str() {
 }
 ci_record_last() {
 	local rc=$1 result=green failed="" sha at tmpf
+	# Record only where .ci/ is gitignored: a fixture tree that runs this script (hack/verify-affected-modes.sh) must stay clean.
+	git -C "$ci_root" check-ignore -q .ci/last.json 2>/dev/null || return 0
 	if [ "$rc" != 0 ]; then
 		result=red
 		[ -z "$ci_last_stage" ] || failed="\"$(ci_json_str "$ci_last_stage")\""
@@ -115,8 +117,14 @@ ci_record_last() {
 		"$(ci_json_str "$(basename "$ci_root")")" "$sha" "$result" "$at" "$failed" >"$tmpf"
 	mv -f "$tmpf" "$ci_root/.ci/last.json" || rm -f "$tmpf"
 }
+ci_done=0
 ci_on_exit() {
 	local rc=$1
+	if [ "$rc" = 0 ] && [ "$ci_done" != 1 ]; then
+		rc=1
+		echo "ci: stopped before the end of the script with status 0 (a set -u abort under bash 3.2?); treating it as red" >&2
+		[ -n "$ci_last_stage" ] || ci_last_stage=unknown
+	fi
 	if [ -n "$ci_cleanup" ]; then eval "$ci_cleanup" || true; fi
 	ci_record_last "$rc" || true
 	exit "$rc"
@@ -216,11 +224,11 @@ run_reader() {
 }
 
 case "$stage" in
-	--sanitize) run_sanitizers; exit 0 ;;
-	--version-check) run_version_check; exit 0 ;;
-	--nodebudget) run_nodebudget; exit 0 ;;
-	--reader) run_reader; exit 0 ;;
-	--notifier) run_notifier; exit 0 ;;
+	--sanitize) run_sanitizers; ci_done=1; exit 0 ;;
+	--version-check) run_version_check; ci_done=1; exit 0 ;;
+	--nodebudget) run_nodebudget; ci_done=1; exit 0 ;;
+	--reader) run_reader; ci_done=1; exit 0 ;;
+	--notifier) run_notifier; ci_done=1; exit 0 ;;
 esac
 
 echo "==> no third-party dependencies"
@@ -349,3 +357,4 @@ for st in --stress --bench-rig; do
 done
 
 echo "k3sm-sdk-swift ci: green"
+ci_done=1
