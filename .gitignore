@@ -2,3 +2,5 @@
 .swiftpm/
 /out/
 .DS_Store
+
+/.ci/
