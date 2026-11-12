@@ -40,7 +40,9 @@ print(K3smSDKVersion.string)
 ```
 
 Read the node budget page. `BudgetPage.defaultPagePath` is the page's location
-for the platform the SDK is built for. `open` maps the page and checks its
+for the platform the SDK is built for. The package declares macOS only, so the
+SDK builds for macOS, and `BudgetPage.linuxPagePath` names where a Linux
+producer puts the page. `open` maps the page and checks its
 header, and throws `notFound` (with the errno), `truncated` or `abiMismatch`.
 `read()` reports `corrupt`, `torn` and `stale`, and can also report
 `abiMismatch` or `truncated` if a writer takes the page over. A page is stale
@@ -66,12 +68,32 @@ do {
 }
 ```
 
-`bytesUntil(signal:rung:)` returns nil for a signal that is not measured in
-bytes, such as a permille or a count, and treats a negative value or threshold
+`bytesUntil(signal:rung:)` returns nil when the page has no such signal, when
+the signal is not measured in bytes (a permille or a count), or when the value
+or the rung's threshold is absent. It treats a negative value or threshold
 as 0. `batchSlots(slotBytes:)` returns an `Int64`: how many slots of that size
 fit in the recommendation's safe additional bytes. It returns 0 when the node
 does not admit, when the page carries no positive recommendation, or when the
 slot size is not positive.
+
+Decode a NodeBudget document you already hold as JSON. `NodeBudgetDecoder` does
+no I/O. `decodeBudget(_:)` reads one NodeBudget, `decodeList(_:)` a
+NodeBudgetList, and `decodeStatus(_:)` a bare status object, which carries no
+apiVersion or kind. Each takes `Data` and throws `NodeBudgetDecodeError`:
+`malformed(path:reason:)`, `unsupportedVersion`, `unsupportedKind(_:)` or
+`notJSON`.
+
+```swift
+import Foundation
+import K3smSDK
+
+do {
+    let budget = try NodeBudgetDecoder.decodeBudget(jsonData)
+    print("status:", budget.status as Any)
+} catch {
+    print("cannot decode:", error)
+}
+```
 
 Follow changes. The writer bumps the page's `notifyEpoch` word only when the
 level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
@@ -80,7 +102,8 @@ on the doorbell, but still checks the word at least every 100 ms, so a missed
 doorbell write delays a change by at most that. One wait on the word is cut
 into slices of at most 24 hours, and after a failed kernel wait the notifier
 polls the word every 10 ms. `changes()` yields the current
-read, then one read per change, from one thread of its own that ends when the
+read, then one read per change. A read that is `torn` or `stale` is read again
+one writer period later, and only that second result is yielded. It runs on one thread of its own that ends when the
 stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
 staleness rule allows, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
