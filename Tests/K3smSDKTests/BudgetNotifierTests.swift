@@ -812,6 +812,40 @@ private final class WriterProcess {
         }
         #expect(exercised >= 3)
     }
+
+    /// A doorbell whose kevent wait fails is marked broken and the wait falls
+    /// back to polling the epoch word: it neither returns early nor spins,
+    /// and a later bump is still seen.
+    @Test func doorbellWaitFailureFallsBackToPolling() throws {
+        let w = try WritablePage()
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path), doorbellPath: w.doorbellPath)
+        let doorbell = try #require(n.doorbell)
+        doorbell.breakQueueForTesting()
+        var got: UInt64? = 7
+        let cpuBefore = threadCPUNanoseconds()
+        let d = elapsed { got = n.wait(timeout: .milliseconds(350)) }
+        let cpu = threadCPUNanoseconds() - cpuBefore
+        print("doorbell fallback wait CPU ms: \(cpu / 1_000_000)")
+        #expect(got == nil)
+        #expect(d >= .milliseconds(340))
+        #expect(d < .seconds(2))
+        #expect(cpu < 100_000_000, "the wait spun: \(cpu / 1_000_000) ms of CPU in a 350 ms wait")
+        #expect(doorbell.isBroken)
+        let waiter = Waiter { n.wait(timeout: .seconds(4)) }
+        waiter.ready.wait()
+        usleep(20_000)
+        w.bumpEpoch()
+        w.wake()
+        #expect(waiter.result(within: 1.5) == .some(1))
+    }
+}
+
+/// The calling thread's CPU time in nanoseconds.
+private func threadCPUNanoseconds() -> UInt64 {
+    var ts = timespec()
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)
+    return UInt64(ts.tv_sec) * 1_000_000_000 + UInt64(ts.tv_nsec)
 }
 
 /// The number of open descriptors in this process, probed with F_GETFD.
