@@ -20,7 +20,7 @@ import Foundation
 import Synchronization
 import Testing
 
-// The page fixtures are vendored byte for byte from apis@6dcc98a
+// The page fixtures are vendored byte for byte from apis@19426c0
 // budget/v1alpha1/testdata/page and checked against their SHA256SUMS by
 // hack/verify-fixtures.sh. manifest.json and layout.v1.1.txt are the
 // authority for every constant and offset below; layout.v1.0.txt is the
@@ -567,7 +567,7 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
 
     @Test func negativePagesGiveManifestErrors() throws {
         let negatives = try #require(try manifest()["negative"] as? [[String: Any]])
-        #expect(negatives.count == 6)
+        #expect(negatives.count == 12)
         for n in negatives {
             let file = try #require(n["file"] as? String)
             let want = try #require(n["error"] as? String)
