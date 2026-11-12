@@ -37,18 +37,27 @@ private final class WritablePage: @unchecked Sendable {
     let base: UnsafeMutableRawPointer
     private let fd: Int32
 
-    init(fresh: Bool = true) throws {
-        dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("k3sm-sdk-notifier-\(UUID().uuidString)").path
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    init(
+        fresh: Bool = true, fixture: String = "darwin.v1.page",
+        in parent: URL = FileManager.default.temporaryDirectory
+    ) throws {
+        let made = parent.appendingPathComponent("k3sm-sdk-notifier-\(UUID().uuidString)").path
+        dir = made
+        try FileManager.default.createDirectory(atPath: made, withIntermediateDirectories: true)
+        // A class init that throws before every stored property is set never
+        // runs deinit, so a failure here removes the directory itself.
+        var ok = false
+        defer { if !ok { try? FileManager.default.removeItem(atPath: made) } }
         path = dir + "/budget.v1.page"
         try FileManager.default.copyItem(
-            atPath: fixtureDir.appendingPathComponent("darwin.v1.page").path, toPath: path)
+            atPath: fixtureDir.appendingPathComponent(fixture).path, toPath: path)
         fd = open(path, O_RDWR)
         guard fd >= 0, let m = mmap(nil, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0), m != MAP_FAILED else {
+            if fd >= 0 { close(fd) }
             throw POSIXError(.EIO)
         }
         base = m
+        ok = true
         if fresh { store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970))) }
     }
 
@@ -209,6 +218,17 @@ private final class WriterProcess {
 /// `changes()` threads process-wide, so another test's feeder running beside
 /// it would read as a thread that never ended.
 @Suite(.serialized) struct BudgetNotifierTests {
+    @Test func writablePageInitFailureLeavesNothingBehind() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-initfail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        #expect(throws: (any Error).self) {
+            _ = try WritablePage(fixture: "no-such-fixture.page", in: parent)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
+    }
+
     @Test func pollReportsOnlyNotifyEpochChanges() throws {
         let w = try WritablePage()
         let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
