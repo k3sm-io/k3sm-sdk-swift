@@ -4,7 +4,8 @@
 #
 # ci.sh -- the k3sm Swift SDK's gate. Run from anywhere; it works on a lone clone.
 #
-#   0. the package declares no dependencies
+#   0. the package declares no dependencies (hack/lib/no-deps.sh on the
+#      show-dependencies stdout, after hack/verify-no-deps-selftest.sh)
 #   1. swift build
 #   2. swift test (the version constants are pinned)
 #   3. build a consumer package that depends on a git clone of this checkout
@@ -259,9 +260,20 @@ echo "==> no third-party dependencies"
 # is no Package.resolved to commit: SwiftPM writes one only when it has pins.
 # ${arr[@]+"${arr[@]}"} expands to nothing for an empty array; macOS bash 3.2
 # treats a bare "${arr[@]}" on an empty array as unbound under set -u.
-deps="$(swift package ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} show-dependencies 2>&1)"
-printf '%s\n' "$deps" | grep -q '^No external dependencies found' \
-	|| { echo "FAIL: the package must not declare dependencies:"; printf '%s\n' "$deps"; exit 1; }
+# Only stdout is judged: SwiftPM's notices on stderr end without a newline and
+# would glue themselves before the answer. stderr is printed on a failure.
+bash hack/verify-no-deps-selftest.sh
+deps_rc=0
+swift package ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} show-dependencies \
+	>"$tmp/deps.out" 2>"$tmp/deps.err" || deps_rc=$?
+deps_bad=0
+[ "$deps_rc" -eq 0 ] || echo "FAIL: swift package show-dependencies exited $deps_rc"
+[ "$deps_rc" -ne 0 ] || bash hack/lib/no-deps.sh "$tmp/deps.out" || deps_bad=1
+if [ "$deps_rc" -ne 0 ] || [ "$deps_bad" -ne 0 ]; then
+	echo "--- stdout:"; cat "$tmp/deps.out"
+	echo "--- stderr:"; cat "$tmp/deps.err"
+	exit 1
+fi
 [ ! -e Package.resolved ] || grep -q '"pins" : \[\s*\]' Package.resolved \
 	|| { echo "FAIL: Package.resolved carries pins"; exit 1; }
 echo "    ok"
