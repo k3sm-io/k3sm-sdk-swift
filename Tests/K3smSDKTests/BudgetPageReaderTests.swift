@@ -758,4 +758,39 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         darwin.recommendation.safeAdditionalBytes = -gib
         #expect(darwin.batchSlots(slotBytes: 1) == 0)
     }
+
+    @Test func openRejectsAFifoAndADirectory() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-open-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // A directory opens read-only, so the type check is what refuses it.
+        #expect(throws: BudgetError.notFound(errno: EFTYPE)) {
+            try BudgetPage.open(path: dir.path)
+        }
+
+        // A FIFO with no writer: a blocking open would wait forever. The open
+        // runs on its own thread; if it has not returned within the bound,
+        // the test opens the FIFO for writing to release it and fails.
+        let fifo = dir.appendingPathComponent("budget.v1.page").path
+        try #require(mkfifo(fifo, 0o600) == 0, "mkfifo errno \(errno)")
+        let result = Mutex<Result<Void, BudgetError>?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        let opener = Thread {
+            let r = Result { () throws(BudgetError) in _ = try BudgetPage.open(path: fifo) }
+            result.withLock { $0 = r }
+            done.signal()
+        }
+        opener.start()
+        if done.wait(timeout: .now() + 3) == .timedOut {
+            Issue.record("open(path:) blocked on a FIFO")
+            let w = Darwin.open(fifo, O_WRONLY | O_NONBLOCK | O_CLOEXEC)
+            if w >= 0 { _ = close(w) }
+            _ = done.wait(timeout: .now() + 3)
+            return
+        }
+        let r = try #require(result.withLock { $0 })
+        #expect(throws: BudgetError.notFound(errno: EFTYPE)) { try r.get() }
+    }
 }
