@@ -144,8 +144,11 @@ public final class BudgetNotifier: Sendable {
         // which the page's staleness rule can call it stale. A hint for when
         // to look again; read() decides.
         var freshUntil: Int64?
-        // Whether the last yield was the stale error.
-        var yieldedStale = false
+        // When the last yield was an error: that error. While it is set the
+        // page is read again every slice, so a recovery, or a change to
+        // another error, is yielded even with no epoch bump, and the
+        // staleness check above resumes after the next snapshot.
+        var lastFailure: BudgetError?
         func stopped() -> Bool { stop.value.load(ordering: .acquiring) }
         func emit() -> Bool {
             var r = page.read()
@@ -167,10 +170,10 @@ public final class BudgetNotifier: Sendable {
             case .success(let s):
                 period = s.writerPeriodSeconds
                 freshUntil = staleAfter(s)
-                yieldedStale = false
+                lastFailure = nil
             case .failure(let e):
                 freshUntil = nil
-                yieldedStale = e == .stale
+                lastFailure = e
             }
         }
 
@@ -185,7 +188,8 @@ public final class BudgetNotifier: Sendable {
             // No epoch change. A writer that went silent never bumps the
             // epoch, so the page's staleness rule is checked here: a
             // snapshot past its fresh window is read again and, when stale,
-            // yielded as such; after a stale yield, the first fresh read is
+            // yielded as such; after an error yield (stale, torn, corrupt or
+            // any other), the first fresh read, or a different error, is
             // yielded.
             if let until = freshUntil, wallSeconds() > until {
                 switch page.read() {
@@ -194,8 +198,15 @@ public final class BudgetNotifier: Sendable {
                 case .failure:
                     guard emit() else { return }
                 }
-            } else if yieldedStale, case .success = page.read() {
-                guard emit() else { return }
+            } else if let last = lastFailure {
+                switch page.read() {
+                case .success:
+                    guard emit() else { return }
+                case .failure(let e) where e != last:
+                    guard emit() else { return }
+                case .failure:
+                    break
+                }
             }
         }
     }
