@@ -444,6 +444,45 @@ private final class WriterProcess {
         #expect(BudgetNotifier.liveFeeders.load(ordering: .relaxed) <= before)
     }
 
+    /// A cancel while the feeder waits one writer period before re-reading a
+    /// torn page ends its thread promptly, even with an hour-long period.
+    @Test func changesEndsOnCancelDuringTheReReadWait() async throws {
+        let w = try WritablePage()
+        w.store(PageLayout.writerPeriodSeconds, 3600)
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let before = BudgetNotifier.liveFeeders.load(ordering: .relaxed)
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        // The first, fresh read sets the feeder's period to 3600 s.
+        var deadline = ContinuousClock.now + .seconds(5)
+        while seen.value.withLock({ $0.isEmpty }), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard case .success = seen.value.withLock({ $0.first }) else {
+            Issue.record("want a fresh first read, got \(seen.value.withLock { $0 })")
+            return
+        }
+        // A write that never finishes, announced by an epoch bump: the read
+        // is torn, so the feeder waits one period before its re-read.
+        w.store(PageLayout.seq, w.load(PageLayout.seq) | 1)
+        w.bumpEpoch()
+        w.wake()
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(seen.value.withLock { $0.count } == 1, "the torn read was not held for its re-read")
+        task.cancel()
+        let cancelled = ContinuousClock.now
+        deadline = cancelled + .seconds(2)
+        while BudgetNotifier.liveFeeders.load(ordering: .relaxed) > before, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(
+            BudgetNotifier.liveFeeders.load(ordering: .relaxed) <= before,
+            "the feeder still ran \(ContinuousClock.now - cancelled) after the cancel")
+    }
+
     /// A read that is stale is yielded as the error after one re-read a
     /// writer period later.
     @Test func changesYieldsStaleAfterOneReRead() async throws {
