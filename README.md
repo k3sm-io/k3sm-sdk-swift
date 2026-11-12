@@ -48,7 +48,7 @@ do {
     switch page.read() {
     case .success(let snapshot):
         print("admit:", snapshot.admitOK)
-        if let room = snapshot.bytesUntil(signal: .memoryCompressor, rung: .admitStop) {
+        if let room = snapshot.bytesUntil(signal: .memoryAvailable, rung: .admitStop) {
             print("bytes until admit-stop:", room)
         }
     case .failure(let error):

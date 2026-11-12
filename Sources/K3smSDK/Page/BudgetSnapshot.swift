@@ -111,13 +111,16 @@ public struct BudgetSnapshot: Equatable, Sendable {
     /// Whether the node admits new work.
     public var admitOK: Bool { admit }
 
-    /// How far the signal's value is from the rung, in the signal's unit
-    /// (bytes, permille or a count): 0 when the value is at or past it, nil
-    /// when the page has no such signal or the value or the rung is absent.
-    /// The `available` signals reach a rung by falling, `memory.compressor`
-    /// and `memory.swap` by rising.
+    /// How many bytes the signal can move, in its worsening direction, before
+    /// it reaches the rung: 0 when the value is at or past it, nil when the
+    /// page has no such signal, the signal is not measured in bytes (a
+    /// permille or a count), or the value or the rung is absent. The
+    /// `available` signals reach a rung by falling, `memory.compressor` and
+    /// `memory.swap` by rising.
     public func bytesUntil(signal: NodeBudget.SignalID, rung: Rung) -> Int64? {
-        guard let s = signals.first(where: { $0.id == signal }), let value = s.value else { return nil }
+        guard let s = signals.first(where: { $0.id == signal }), s.unit == .bytes,
+            let value = s.value
+        else { return nil }
         let threshold: Int64?
         switch rung {
         case .warn: threshold = s.warnThreshold

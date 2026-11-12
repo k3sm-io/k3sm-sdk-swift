@@ -667,8 +667,8 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         // memory.available falls toward its rungs: 6 GiB now, warn at 2 GiB.
         #expect(s.bytesUntil(signal: .memoryAvailable, rung: .warn) == Int64(4) << 30)
         #expect(s.bytesUntil(signal: .memoryAvailable, rung: .evictHard) == Int64(6_442_450_944 - 104_857_600))
-        // memory.compressor rises toward its rungs: 210 permille now, warn at 500.
-        #expect(s.bytesUntil(signal: .memoryCompressor, rung: .warn) == Int64(290))
+        // memory.compressor is in permille, not bytes: no byte distance.
+        #expect(s.bytesUntil(signal: .memoryCompressor, rung: .warn) == nil)
         // swapfs.available has no evict-soft rung; imagefs.available has no rungs.
         #expect(s.bytesUntil(signal: .swapfsAvailable, rung: .evictSoft) == nil)
         #expect(s.bytesUntil(signal: .imagefsAvailable, rung: .warn) == nil)
@@ -687,5 +687,22 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
 
         let linux = try readFixture("linux-producer.v1.page").get()
         #expect(linux.bytesUntil(signal: .memoryCompressor, rung: .warn) == nil)
+    }
+
+    @Test func bytesUntilIsNilForNonByteSignals() throws {
+        var s = try readFixture("darwin.v1.page").get()
+        // memory.compressor is in permille: 210 now, warn at 500.
+        let i = try #require(s.signals.firstIndex { $0.id == .memoryCompressor })
+        #expect(s.signals[i].unit == .permille)
+        #expect(s.signals[i].value != nil && s.signals[i].warnThreshold != nil)
+        for rung in BudgetSnapshot.Rung.allCases {
+            #expect(s.bytesUntil(signal: .memoryCompressor, rung: rung) == nil)
+        }
+        // A count is not bytes either.
+        s.signals[i].unit = .count
+        #expect(s.bytesUntil(signal: .memoryCompressor, rung: .warn) == nil)
+        // The same record in bytes gives the distance to the rising rung.
+        s.signals[i].unit = .bytes
+        #expect(s.bytesUntil(signal: .memoryCompressor, rung: .warn) == Int64(290))
     }
 }
