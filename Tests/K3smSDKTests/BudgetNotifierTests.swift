@@ -26,81 +26,6 @@ import Testing
 /// sanitizer runs skip them.
 private let integration = ProcessInfo.processInfo.environment["K3SM_SDK_INTEGRATION"] == "1"
 
-private let fixtureDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-    .appendingPathComponent("Fixtures/page")
-
-/// A page file the test owns, with a writable shared mapping of it standing
-/// in for the writer, and an optional doorbell file beside it.
-private final class WritablePage: @unchecked Sendable {
-    let dir: String
-    let path: String
-    let base: UnsafeMutableRawPointer
-    private let fd: Int32
-
-    init(
-        fresh: Bool = true, fixture: String = "darwin.v1.page",
-        in parent: URL = FileManager.default.temporaryDirectory
-    ) throws {
-        let made = parent.appendingPathComponent("k3sm-sdk-notifier-\(UUID().uuidString)").path
-        dir = made
-        try FileManager.default.createDirectory(atPath: made, withIntermediateDirectories: true)
-        // A class init that throws before every stored property is set never
-        // runs deinit, so a failure here removes the directory itself.
-        var ok = false
-        defer { if !ok { try? FileManager.default.removeItem(atPath: made) } }
-        path = dir + "/budget.v1.page"
-        try FileManager.default.copyItem(
-            atPath: fixtureDir.appendingPathComponent(fixture).path, toPath: path)
-        fd = open(path, O_RDWR)
-        guard fd >= 0, let m = mmap(nil, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0), m != MAP_FAILED else {
-            if fd >= 0 { close(fd) }
-            throw POSIXError(.EIO)
-        }
-        base = m
-        ok = true
-        if fresh { store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970))) }
-    }
-
-    deinit {
-        munmap(base, 4096)
-        close(fd)
-        try? FileManager.default.removeItem(atPath: dir)
-    }
-
-    var doorbellPath: String { dir + "/budget.bell" }
-
-    func word(_ offset: Int) -> UnsafeMutablePointer<Atomic<UInt64>> {
-        (base + offset).assumingMemoryBound(to: Atomic<UInt64>.self)
-    }
-
-    func store(_ offset: Int, _ value: UInt64) { word(offset).pointee.store(value, ordering: .releasing) }
-    func load(_ offset: Int) -> UInt64 { word(offset).pointee.load(ordering: .acquiring) }
-
-    /// A seqlock publish of a fresh sample, optionally with a new level.
-    func publish(level: UInt64? = nil) {
-        let seq = load(PageLayout.seq)
-        store(PageLayout.seq, seq &+ 1)
-        store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970)))
-        if let level { store(PageLayout.level, level) }
-        store(PageLayout.seq, seq &+ 2)
-    }
-
-    func bumpEpoch() { store(PageLayout.notifyEpoch, load(PageLayout.notifyEpoch) &+ 1) }
-
-    func wake() {
-        let rc = ck3sm_test_wake_all(base + PageLayout.notifyEpoch)
-        precondition(rc == 0 || rc == ENOENT, "wake: errno \(rc)")
-    }
-
-    func ringDoorbell() throws {
-        let bell = open(doorbellPath, O_WRONLY)
-        guard bell >= 0 else { throw POSIXError(.EIO) }
-        defer { close(bell) }
-        var b: UInt8 = 1
-        guard pwrite(bell, &b, 1, 0) == 1 else { throw POSIXError(.EIO) }
-    }
-}
-
 /// Runs `body` on a dedicated thread, as the notifier's documentation asks
 /// of a blocking wait. `ready` is signalled just before `body` starts.
 private final class Waiter<T: Sendable>: @unchecked Sendable {
@@ -121,44 +46,6 @@ private final class Waiter<T: Sendable>: @unchecked Sendable {
     func result(within seconds: Double) -> T? {
         done.wait(timeout: .now() + seconds) == .success ? value : nil
     }
-}
-
-/// An `AsyncStream` iterator whose `next` is bounded: a yield that never
-/// comes records an issue after `seconds` instead of hanging the test.
-private final class BoundedIterator<Element: Sendable>: @unchecked Sendable {
-    private var it: AsyncStream<Element>.Iterator
-
-    init(_ stream: AsyncStream<Element>) { it = stream.makeAsyncIterator() }
-
-    /// The next element, or nil when the stream ended; a timeout records an
-    /// issue and returns nil, so it fails the test either way.
-    func next(within seconds: Double = 5, sourceLocation: SourceLocation = #_sourceLocation) async -> Element? {
-        let got: Element?? = await withTaskGroup(of: Element??.self) { group in
-            group.addTask {
-                var it = self.it
-                let e = await it.next()
-                self.it = it
-                return .some(e)
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(seconds))
-                return .none
-            }
-            let first = await group.next() ?? .none
-            group.cancelAll()
-            return first
-        }
-        guard let got else {
-            Issue.record("no element within \(seconds) s", sourceLocation: sourceLocation)
-            return nil
-        }
-        return got
-    }
-}
-
-/// The reads a `changes()` consumer collected.
-private final class Reads: Sendable {
-    let value = Mutex<[Result<BudgetSnapshot, BudgetError>]>([])
 }
 
 private func elapsed(_ body: () -> Void) -> Duration {
@@ -687,6 +574,174 @@ private final class WriterProcess {
         w.bumpEpoch()
         w.wake()
         #expect(await it.next() == .critical)
+    }
+
+    /// A read that is torn, by a write that finishes inside the writer
+    /// period, is not yielded: after the epoch bump that announced it, the
+    /// stream yields the re-read's snapshot a period later, and never the
+    /// torn error.
+    @Test func changesYieldsTheHealedReReadAfterATornRead() async throws {
+        let w = try WritablePage()
+        w.store(PageLayout.writerPeriodSeconds, 2)
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        func reads() -> [Result<BudgetSnapshot, BudgetError>] { seen.value.withLock { $0 } }
+        func isTorn(_ r: Result<BudgetSnapshot, BudgetError>) -> Bool {
+            if case .failure(.torn) = r { true } else { false }
+        }
+
+        // The first, fresh read sets the feeder's period to 2 s.
+        var deadline = ContinuousClock.now + .seconds(5)
+        while reads().isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard case .success = reads().first else {
+            Issue.record("want a fresh first read, got \(reads())")
+            return
+        }
+
+        // A write in progress, announced by an epoch bump: the read is torn.
+        let seq = w.load(PageLayout.seq)
+        w.store(PageLayout.seq, seq | 1)
+        w.bumpEpoch()
+        w.wake()
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(reads().count == 1, "the torn read was yielded before its re-read: \(reads())")
+        // The write finishes inside the period, with no further bump.
+        w.store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970)))
+        w.store(PageLayout.level, 3)
+        w.store(PageLayout.seq, (seq | 1) &+ 1)
+
+        deadline = ContinuousClock.now + .seconds(8)
+        while reads().count < 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let all = reads()
+        guard all.count >= 2, case .success(let s) = all[1] else {
+            Issue.record("want the re-read's snapshot second, got \(all)")
+            return
+        }
+        #expect(s.level == .critical)
+        #expect(!all.contains(where: isTorn), "a torn error was yielded: \(all)")
+    }
+
+    /// A consumer that drops the stream, without cancelling its task, ends
+    /// the feeder thread: the stream's termination stops it.
+    @Test func changesEndsWhenTheStreamIsDropped() async throws {
+        let w = try WritablePage()
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        // A feeder an earlier test cancelled exits only at its next 100 ms
+        // check: take the baseline once the count has held one value for
+        // about 300 ms.
+        let settle = ContinuousClock.now + .seconds(5)
+        var before = BudgetNotifier.liveFeeders.load(ordering: .relaxed)
+        var heldSince = ContinuousClock.now
+        while ContinuousClock.now - heldSince < .milliseconds(300), ContinuousClock.now < settle {
+            try await Task.sleep(for: .milliseconds(20))
+            let now = BudgetNotifier.liveFeeders.load(ordering: .relaxed)
+            if now != before {
+                before = now
+                heldSince = ContinuousClock.now
+            }
+        }
+        let started = try await holdAndDropAStream(n, above: before)
+        #expect(started, "no feeder thread started within 5 s")
+        // No epoch bump follows, so only the termination can end the thread.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while BudgetNotifier.liveFeeders.load(ordering: .relaxed) > before, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(
+            BudgetNotifier.liveFeeders.load(ordering: .relaxed) <= before,
+            "the feeder still ran after its stream was dropped")
+    }
+
+    /// Makes a `changes()` stream that lives only in this call, waits until
+    /// its feeder runs (the live count above `baseline`) and returns
+    /// whether it did; the stream is dropped on return, never cancelled.
+    @inline(never)
+    private func holdAndDropAStream(_ n: BudgetNotifier, above baseline: Int) async throws -> Bool {
+        let stream = n.changes()
+        let deadline = ContinuousClock.now + .seconds(5)
+        while BudgetNotifier.liveFeeders.load(ordering: .relaxed) <= baseline, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let started = BudgetNotifier.liveFeeders.load(ordering: .relaxed) > baseline
+        withExtendedLifetime(stream) {}
+        return started
+    }
+
+    /// A feeder built with a doorbell that opens yields the first read and
+    /// each change the writer announces by ringing it, with no address wake.
+    /// Whether the ring or the 100 ms word check woke it is not told apart.
+    @Test func changesWithAGoodDoorbellYieldsTheFirstReadAndTheChange() async throws {
+        let w = try WritablePage()
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path), doorbellPath: w.doorbellPath)
+        let (levels, feed) = AsyncStream.makeStream(of: NodeBudget.Level.self)
+        let task = Task {
+            for await r in n.changes() {
+                if case let .success(s) = r { feed.yield(s.level) }
+            }
+            feed.finish()
+        }
+        defer { task.cancel() }
+        let it = BoundedIterator(levels)
+        #expect(await it.next() == .ok)
+        w.publish(level: 3)
+        w.bumpEpoch()
+        try w.ringDoorbell()
+        #expect(await it.next() == .critical)
+    }
+
+    /// changes() keeps its own epoch, starting from the live word: a seed
+    /// that differs from the live word yields nothing extra on the stream,
+    /// and the stream does not consume the notifier's seeded difference.
+    @Test func changesIgnoresTheSeed() async throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let live = page.loadNotifyEpoch()
+        let n = try BudgetNotifier(page)
+        n.seed(live &+ 5)
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        func reads() -> [Result<BudgetSnapshot, BudgetError>] { seen.value.withLock { $0 } }
+        func waitFor(count: Int) async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while reads().count < count, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+
+        try await waitFor(count: 1)
+        guard case .success(let s0) = reads().first else {
+            Issue.record("want a fresh first read, got \(reads())")
+            return
+        }
+        #expect(s0.level == .ok)
+        // A stream that took the seed as its epoch would see a change at once.
+        try await Task.sleep(for: .milliseconds(350))
+        #expect(reads().count == 1, "the seed produced a yield: \(reads())")
+
+        w.publish(level: 3)
+        w.bumpEpoch()
+        w.wake()
+        try await waitFor(count: 2)
+        let all = reads()
+        guard all.count == 2, case .success(let s1) = all[1] else {
+            Issue.record("want one change after the first read, got \(all)")
+            return
+        }
+        #expect(s1.level == .critical)
+        #expect(n.poll() == page.loadNotifyEpoch(), "the stream consumed the seeded difference")
+        #expect(n.poll() == nil)
     }
 
     /// A timeout too large to add to the clock waits with no deadline rather
