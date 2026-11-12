@@ -26,15 +26,14 @@ private func byteSignal(_ id: NodeBudget.SignalID) throws -> NodeBudget.Signal {
 
 // A snapshot that carries only the given signals.
 private func snapshot(_ signals: [NodeBudget.Signal]) throws -> BudgetSnapshot {
-    let empty = Data("{}".utf8)
     return BudgetSnapshot(
         seq: 2, notifyEpoch: 0, generation: 1, writerPeriodSeconds: 1, observedAt: 0,
         platform: .darwin, nodeName: "node",
-        capacity: try JSONDecoder().decode(NodeBudget.Capacity.self, from: empty),
+        capacity: NodeBudget.Capacity(),
         level: .ok, darwin: nil, linux: nil, signals: signals, admit: true,
         admitReasonSignal: nil, evictDeadline: nil,
         killMode: .init(mode: nil, armed: false, armingEpisodes: 0, reason: nil),
-        recommendation: try JSONDecoder().decode(NodeBudget.Recommendation.self, from: empty),
+        recommendation: NodeBudget.Recommendation(),
         counters: [])
 }
 
@@ -57,7 +56,7 @@ private func snapshot(_ signals: [NodeBudget.Signal]) throws -> BudgetSnapshot {
             (.admitStop, 8_000),
             (.critical, 9_000),
         ]
-        #expect(want.count == BudgetSnapshot.Rung.allCases.count)
+        #expect(Set(want.map(\.rung)) == Set(BudgetSnapshot.Rung.allCases))
         for w in want {
             #expect(s.bytesUntil(signal: .memoryAvailable, rung: w.rung) == w.distance, "\(w.rung)")
         }
