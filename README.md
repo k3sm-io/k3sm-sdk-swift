@@ -40,10 +40,10 @@ print(K3smSDKVersion.string)
 ```
 
 Read the node budget page. `BudgetPage.defaultPagePath` is the page's location
-for the platform the SDK is built for. The package declares macOS only, so the
-SDK builds for macOS, and `BudgetPage.linuxPagePath` names where a Linux
-producer puts the page. `open` maps the page and checks its
-header, and throws `notFound` (with the errno), `truncated` or `abiMismatch`.
+for the platform the SDK is built for. The package declares macOS 26.0 or
+later, and `BudgetPage.linuxPagePath` is where a reader on Linux finds the
+page. `open` maps the page and checks its header, and throws `notFound` (with
+the errno), `truncated` or `abiMismatch`.
 `read()` reports `corrupt`, `torn` and `stale`, and can also report
 `abiMismatch` or `truncated` if a writer takes the page over. A page is stale
 when its observation is more than three writer periods old:
@@ -87,6 +87,7 @@ apiVersion or kind. Each takes `Data` and throws `NodeBudgetDecodeError`:
 import Foundation
 import K3smSDK
 
+// jsonData is the NodeBudget JSON you already hold, as Data.
 do {
     let budget = try NodeBudgetDecoder.decodeBudget(jsonData)
     print("status:", budget.status as Any)
@@ -102,9 +103,10 @@ on the doorbell, but still checks the word at least every 100 ms, so a missed
 doorbell write delays a change by at most that. One wait on the word is cut
 into slices of at most 24 hours, and after a failed kernel wait the notifier
 polls the word every 10 ms. `changes()` yields the current
-read, then one read per change. A read that is `torn` or `stale` is read again
-one writer period later, and only that second result is yielded. It runs on one thread of its own that ends when the
-stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
+read, then one read per change, from one thread of its own that ends when the
+stream is cancelled. A read that is `torn` or `stale` is read again one writer
+period later, and only that second result is yielded. A writer that goes
+silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
 staleness rule allows, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
 call it from Swift concurrency. The `doorbellPath:` parameter of the
