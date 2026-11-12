@@ -379,9 +379,12 @@ final class Doorbell: Sendable {
 
     /// A test hook: puts the doorbell file's descriptor over the kqueue
     /// descriptor with `dup2`, so every later kevent wait on it fails. Both
-    /// numbers stay open, and the destructor closes both.
+    /// numbers stay open, and the destructor closes both. The `dup2` runs
+    /// outside the `precondition`, so a build that does not evaluate
+    /// preconditions still swaps the descriptor.
     func breakQueueForTesting() {
-        precondition(dup2(fd, kq) >= 0)
+        let rc = dup2(fd, kq)
+        precondition(rc >= 0, "dup2 over the kqueue descriptor failed")
     }
 
     /// Blocks until the doorbell is written or the time runs out. A write
