@@ -997,6 +997,110 @@ private final class WriterProcess {
         #expect(d >= .milliseconds(290))
         #expect(d < .seconds(2))
     }
+
+    /// A kevent wait interrupted by a handled signal returns EINTR, and the
+    /// doorbell treats that as a wake to retry, not as a failure: the wait
+    /// returns true soon after the signal, long before its ceiling, and the
+    /// doorbell is not marked broken. The handler is installed without
+    /// SA_RESTART so the interruption reaches the caller.
+    @Test func doorbellWaitInterruptedBySignalIsRetriedNotBroken() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-bell-eintr-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/budget.bell"
+        #expect(FileManager.default.createFile(atPath: path, contents: Data([0])))
+        let bell = try Doorbell(path: path)
+
+        var action = sigaction()
+        action.__sigaction_u.__sa_handler = { _ in }
+        action.sa_flags = 0
+        sigemptyset(&action.sa_mask)
+        var previous = sigaction()
+        try #require(sigaction(SIGUSR1, &action, &previous) == 0, "helper: sigaction errno \(errno)")
+        defer { _ = sigaction(SIGUSR1, &previous, nil) }
+
+        let state = InterruptedWait()
+        let waiter = Thread {
+            // The test runner's threads start with SIGUSR1 blocked, and a
+            // blocked signal never interrupts the wait, so the waiter
+            // unblocks it for itself before it publishes.
+            var unblock = sigset_t()
+            sigemptyset(&unblock)
+            sigaddset(&unblock, SIGUSR1)
+            let maskRC = pthread_sigmask(SIG_UNBLOCK, &unblock, nil)
+            if maskRC != 0 {
+                state.maskFailed.store(maskRC, ordering: .releasing)
+                state.result.store(3, ordering: .releasing)
+                return
+            }
+            state.thread.store(UInt(bitPattern: pthread_self()), ordering: .releasing)
+            let ok = bell.wait(nanoseconds: 2_000_000_000)
+            state.endedAt.store(clock_gettime_nsec_np(CLOCK_UPTIME_RAW), ordering: .releasing)
+            state.result.store(ok ? 1 : 2, ordering: .releasing)
+        }
+        waiter.start()
+
+        // The waiter publishes its pthread before it waits; give it a bound.
+        let publishDeadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 1_000_000_000
+        while state.thread.load(ordering: .acquiring) == 0,
+            clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < publishDeadline
+        {
+            usleep(1_000)
+        }
+        let maskFailed = state.maskFailed.load(ordering: .acquiring)
+        try #require(maskFailed == 0, "helper: pthread_sigmask returned \(maskFailed)")
+        let published = state.thread.load(ordering: .acquiring)
+        try #require(published != 0, "helper: the waiter thread never published its pthread")
+        let target = try #require(pthread_t(bitPattern: published), "helper: no pthread from the published value")
+        usleep(100_000)
+
+        // A signal that lands before the thread is inside kevent only runs the
+        // handler, so it is sent again at short intervals until the wait ends.
+        var firstSignal: UInt64 = 0
+        var sent = 0
+        var killFailed: Int32 = 0
+        while state.result.load(ordering: .acquiring) == 0, sent < 10 {
+            if firstSignal == 0 { firstSignal = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
+            let rc = pthread_kill(target, SIGUSR1)
+            if rc != 0 {
+                killFailed = rc
+                break
+            }
+            sent += 1
+            for _ in 0..<50 where state.result.load(ordering: .acquiring) == 0 { usleep(1_000) }
+        }
+        // Wait for the waiter to end before the handler is restored, so no
+        // signal can reach it under the default action. The ceiling is 2 s.
+        let joinDeadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 4_000_000_000
+        while !waiter.isFinished, clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < joinDeadline { usleep(1_000) }
+        let finished = waiter.isFinished
+        try #require(finished, "helper: the waiter thread did not finish within 4 s")
+        #expect(killFailed == 0, "helper: pthread_kill returned \(killFailed)")
+        print("doorbell EINTR wait: \(sent) signal(s) sent")
+
+        let result = state.result.load(ordering: .acquiring)
+        let endedAt = state.endedAt.load(ordering: .acquiring)
+        #expect(result == 1, "the interrupted wait returned false (result \(result))")
+        #expect(!bell.isBroken)
+        #expect(firstSignal != 0)
+        if firstSignal != 0, endedAt >= firstSignal {
+            #expect(
+                endedAt - firstSignal < 1_000_000_000,
+                "the wait ended \((endedAt - firstSignal) / 1_000_000) ms after the first signal")
+        }
+    }
+}
+
+/// The interrupted doorbell wait's shared state: the waiter's pthread as a
+/// bit pattern (0 until published), when the wait ended on the uptime clock,
+/// and its result (0 still waiting, 1 true, 2 false, 3 setup failed).
+private final class InterruptedWait: Sendable {
+    /// The waiter's pthread_sigmask error, 0 when SIGUSR1 was unblocked.
+    let maskFailed = Atomic<Int32>(0)
+    let thread = Atomic<UInt>(0)
+    let endedAt = Atomic<UInt64>(0)
+    let result = Atomic<UInt8>(0)
 }
 
 /// When the ringer thread wrote the doorbell, on the uptime clock; 0 until then.
