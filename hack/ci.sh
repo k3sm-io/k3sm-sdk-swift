@@ -195,6 +195,7 @@ run_sanitizers() {
 
 run_version_check() {
 	echo "==> version constants (hack/verify-version.sh)"
+	bash hack/verify-version-selftest.sh
 	bash hack/verify-version.sh
 }
 
