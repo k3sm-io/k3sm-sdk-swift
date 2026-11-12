@@ -949,22 +949,35 @@ private final class WriterProcess {
         let ringer = Thread {
             usleep(200_000)
             let fd = open(path, O_WRONLY)
-            guard fd >= 0 else { return }
+            guard fd >= 0 else {
+                ringAt.failed.store(true, ordering: .releasing)
+                return
+            }
             defer { close(fd) }
             var b: UInt8 = 1
             ringAt.at.store(clock_gettime_nsec_np(CLOCK_UPTIME_RAW), ordering: .releasing)
-            _ = pwrite(fd, &b, 1, 0)
+            if pwrite(fd, &b, 1, 0) != 1 {
+                ringAt.failed.store(true, ordering: .releasing)
+            }
         }
         let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         ringer.start()
         let ok = bell.wait(nanoseconds: 5_000_000_000)
         let end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let rang = ringAt.at.load(ordering: .acquiring)
+        while !ringer.isFinished { usleep(1_000) }
 
+        let ringFailed = ringAt.failed.load(ordering: .acquiring)
+        #expect(!ringFailed, "the helper could not write the doorbell")
         #expect(ok)
         #expect(rang != 0, "the wait returned before the doorbell was written")
         #expect(rang <= end)
-        #expect(end - start < 2_000_000_000, "the wait ran \((end - start) / 1_000_000) ms of its 5000 ms ceiling")
+        // The wake is measured from the write, so a helper thread that was slow
+        // to start cannot fail it; a missed wake ends near the 5000 ms ceiling.
+        if rang != 0, rang <= end {
+            #expect(end - rang < 1_000_000_000, "the wait ended \((end - rang) / 1_000_000) ms after the write")
+        }
+        #expect(end - start < 3_000_000_000, "the wait ran \((end - start) / 1_000_000) ms of its 5000 ms ceiling")
     }
 
     /// The control: with no write, the doorbell wait runs to its ceiling and
@@ -989,6 +1002,8 @@ private final class WriterProcess {
 /// When the ringer thread wrote the doorbell, on the uptime clock; 0 until then.
 private final class RingTime: Sendable {
     let at = Atomic<UInt64>(0)
+    /// True when the ringer thread could not open or write the doorbell file.
+    let failed = Atomic<Bool>(false)
 }
 
 /// The calling thread's CPU time in nanoseconds.
