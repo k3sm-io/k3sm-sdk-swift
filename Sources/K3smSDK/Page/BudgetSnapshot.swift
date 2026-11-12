@@ -138,13 +138,15 @@ public struct BudgetSnapshot: Equatable, Sendable {
         return max(0, rising ? t - v : v - t)
     }
 
-    /// How many slots of `slotBytes` each the node can safely take now: 0
-    /// while it does not admit, nil when the page carries no recommendation
-    /// or `slotBytes` is not positive. A consumer may only lower its own cap
-    /// with it.
-    public func batchSlots(slotBytes: Int64) -> Int64? {
-        guard slotBytes > 0, let safe = recommendation.safeAdditionalBytes else { return nil }
-        guard admit else { return 0 }
-        return max(0, safe) / slotBytes
+    /// How many more slots of `slotBytes` each the node can safely take now:
+    /// `recommendation.safeAdditionalBytes / slotBytes`, and 0 while the node
+    /// does not admit, when the page carries no recommendation or a
+    /// recommendation that is not positive, or when `slotBytes` is not
+    /// positive. The C++ SDK's `batch_slots` has the same contract. A
+    /// consumer may only lower its own cap with it, never raise it.
+    public func batchSlots(slotBytes: Int64) -> Int64 {
+        guard admit, let safe = recommendation.safeAdditionalBytes, safe > 0, slotBytes > 0
+        else { return 0 }
+        return safe / slotBytes
     }
 }

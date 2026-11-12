@@ -679,17 +679,17 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         // pid.available is a count, not bytes.
         #expect(s.bytesUntil(signal: .pidAvailable, rung: .warn) == nil)
         // 3 GiB to spare.
-        #expect(s.batchSlots(slotBytes: 1 << 30) == Int64(3))
-        #expect(s.batchSlots(slotBytes: 2 << 30) == Int64(1))
-        #expect(s.batchSlots(slotBytes: 0) == nil)
+        #expect(s.batchSlots(slotBytes: 1 << 30) == 3)
+        #expect(s.batchSlots(slotBytes: 2 << 30) == 1)
+        #expect(s.batchSlots(slotBytes: 0) == 0)
 
         s.signals[0].value = 1 << 30 // past warn and admit-stop
         #expect(s.bytesUntil(signal: .memoryAvailable, rung: .warn) == Int64(0))
         s.admit = false
         #expect(!s.admitOK)
-        #expect(s.batchSlots(slotBytes: 1024) == Int64(0))
+        #expect(s.batchSlots(slotBytes: 1024) == 0)
         s.recommendation.safeAdditionalBytes = nil
-        #expect(s.batchSlots(slotBytes: 1024) == nil)
+        #expect(s.batchSlots(slotBytes: 1024) == 0)
 
         let linux = try readFixture("linux-producer.v1.page").get()
         #expect(linux.bytesUntil(signal: .memoryCompressor, rung: .warn) == nil)
@@ -729,5 +729,33 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
             s.signals[c.index].warnThreshold = c.threshold
             #expect(s.bytesUntil(signal: c.signal, rung: .warn) == c.want, "\(c.signal) \(c.value) \(c.threshold)")
         }
+    }
+
+    // The inputs and results of the C++ SDK's test_helpers batch_slots cases.
+    @Test func batchSlotsIsZeroWithoutARecommendationOrSlotSize() throws {
+        let gib: Int64 = 1 << 30
+        var darwin = try readFixture("darwin.v1.page").get()
+        let linux = try readFixture("linux-producer.v1.page").get()
+        let absent = try readFixture("absent.v1.page").get()
+
+        // 3 GiB to spare.
+        #expect(darwin.batchSlots(slotBytes: 1 * gib) == 3)
+        #expect(darwin.batchSlots(slotBytes: 2 * gib) == 1)
+        #expect(darwin.batchSlots(slotBytes: 4 * gib) == 0)
+        // A slot size that is not positive.
+        #expect(darwin.batchSlots(slotBytes: 0) == 0)
+        #expect(darwin.batchSlots(slotBytes: -1) == 0)
+        // The node does not admit.
+        #expect(!linux.admit)
+        #expect(linux.batchSlots(slotBytes: 1) == 0)
+        // No recommendation.
+        #expect(absent.recommendation.safeAdditionalBytes == nil)
+        #expect(absent.batchSlots(slotBytes: 1) == 0)
+        // A recommendation that is not positive, on a node that admits.
+        #expect(darwin.admit)
+        darwin.recommendation.safeAdditionalBytes = 0
+        #expect(darwin.batchSlots(slotBytes: 1) == 0)
+        darwin.recommendation.safeAdditionalBytes = -gib
+        #expect(darwin.batchSlots(slotBytes: 1) == 0)
     }
 }
