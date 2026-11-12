@@ -13,7 +13,8 @@
 #   5. every .swift file carries the Apache-2.0 header
 #   6. every file under .github/workflows/ is dormant (fully commented out)
 #   7. the dependency supply-chain check: its self-test, then the live tree
-#   8. the version constants against a v* tag on HEAD (hack/verify-version.sh)
+#   8. the version constants against a v* tag on HEAD (hack/verify-version.sh,
+#      after its self-test, hack/verify-version-selftest.sh)
 #   9. swift test under the address, undefined-behavior and thread sanitizers
 #  10. the NodeBudget status types: the vendored goldens match their digests
 #      (hack/verify-fixtures.sh, after its self-test) and the gate test
