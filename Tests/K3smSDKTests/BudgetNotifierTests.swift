@@ -227,6 +227,20 @@ private final class WriterProcess {
         #expect(waiter.result(within: 5) == .some(1))
     }
 
+    /// With a doorbell, a bump whose doorbell write never happened (and
+    /// with no address wake either) is still seen, from the epoch word,
+    /// well before the timeout.
+    @Test func waitWakesOnEpochBumpWhenDoorbellNeverRings() throws {
+        let w = try WritablePage()
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path), doorbellPath: w.doorbellPath)
+        let waiter = Waiter { n.wait(timeout: .seconds(4)) }
+        waiter.ready.wait()
+        usleep(20_000)
+        w.bumpEpoch()
+        #expect(waiter.result(within: 1.5) == .some(1))
+    }
+
     @Test func missingDoorbellIsNotFound() throws {
         let w = try WritablePage()
         let page = try BudgetPage.open(path: w.path)

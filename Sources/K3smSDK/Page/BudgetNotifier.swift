@@ -27,7 +27,9 @@ internal import CK3smPage
 /// `os_sync_wait_on_address_with_timeout` and `OS_SYNC_WAIT_ON_ADDRESS_SHARED`
 /// on the shared read-only mapping, so a writer in another process wakes it.
 /// When the producer provides a doorbell file instead, pass its path and the
-/// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE`).
+/// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE`) in
+/// slices of at most 50 ms, checking the word between them, so a bump whose
+/// doorbell write failed is still seen within one slice.
 /// No socket is used. A reader that wants every sample polls `read()`.
 ///
 /// The notifier remembers the last epoch it reported, starting from the
@@ -48,6 +50,9 @@ public final class BudgetNotifier: Sendable {
     /// How long the `changes()` thread waits before it checks whether its
     /// stream was cancelled.
     static let feederSlice: Duration = .milliseconds(100)
+    /// The longest a doorbell wait blocks before the epoch word is checked
+    /// again: the worst-case delay for a bump whose doorbell never rings.
+    static let doorbellSlice: Duration = .milliseconds(50)
     /// The number of `changes()` threads running, for the tests.
     static let liveFeeders = Atomic<Int>(0)
 
@@ -165,7 +170,10 @@ public final class BudgetNotifier: Sendable {
             guard now < deadline else { return nil }
             let remaining = deadline - now
             if let doorbell {
-                doorbell.wait(nanoseconds: remaining)
+                // The doorbell is an extra wake source, never the only one:
+                // its write can fail or never happen, so the word is checked
+                // again at least every doorbellSlice.
+                doorbell.wait(nanoseconds: min(remaining, doorbellSlice.nanoseconds))
                 continue
             }
             switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, remaining) {
