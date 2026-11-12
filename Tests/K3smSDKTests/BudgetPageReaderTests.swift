@@ -918,4 +918,66 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         let after = openDescriptorCount()
         #expect(after - before < descriptorCountSlack, "descriptors grew from \(before) to \(after)")
     }
+
+    /// The public read() checks staleness against the wall clock itself: a
+    /// page observed 1000 s ago with a 1 s writer period is stale, the same
+    /// page observed now is not.
+    @Test func publicReadChecksTheWallClock() throws {
+        func page(observedAt: Int64) throws -> ScratchPage {
+            try ScratchPage(copying: "darwin.v1.page") { base in
+                base.storeBytes(of: UInt64(bitPattern: observedAt).littleEndian,
+                                toByteOffset: PageLayout.observedAt, as: UInt64.self)
+                base.storeBytes(of: UInt64(1).littleEndian,
+                                toByteOffset: PageLayout.writerPeriodSeconds, as: UInt64.self)
+            }
+        }
+        let old = try page(observedAt: Int64(time(nil)) - 1000)
+        #expect(throws: BudgetError.stale) { try BudgetPage.open(path: old.path).read().get() }
+
+        let now = Int64(time(nil))
+        let fresh = try page(observedAt: now)
+        let s = try BudgetPage.open(path: fresh.path).read().get()
+        #expect(s.observedAt == now)
+    }
+
+    /// A block with only one field present is present: that field reads and
+    /// its siblings are nil. Each case starts from the page with every
+    /// optional value absent and stores one word.
+    @Test func aBlockWithOneFieldPresentIsPresent() throws {
+        let observedAt = try #require(try expectedFixtures()["absent.v1.page"]).observedAt
+        func read(storing value: Int64, at offset: Int) throws -> BudgetSnapshot {
+            let scratch = try ScratchPage(copying: "absent.v1.page") { base in
+                base.storeBytes(of: UInt64(bitPattern: value).littleEndian, toByteOffset: offset, as: UInt64.self)
+            }
+            return try BudgetPage.open(path: scratch.path).read(now: observedAt).get()
+        }
+
+        // The compressor's bytesStored alone.
+        let d = try #require(try read(storing: 4096, at: PageLayout.darwin + 24).darwin)
+        let compressor = try #require(d.compressor)
+        #expect(compressor.bytesStored == 4096)
+        #expect(compressor.bytesUsed == nil)
+        #expect(compressor.segmentLimitBytes == nil)
+
+        // The cpu PSI full line's totalUs alone: cpu.some (24 bytes), then
+        // full's avg10, avg60, totalUs.
+        let psi = try #require(try read(storing: 777, at: PageLayout.linuxPSI + 24 + 16).linux?.psi)
+        let cpu = try #require(psi.cpu)
+        let full = try #require(cpu.full)
+        #expect(full.totalUs == 777)
+        #expect(full.avg10Permille == nil)
+        #expect(full.avg60Permille == nil)
+        #expect(cpu.some == nil)
+        #expect(psi.memory == nil)
+        #expect(psi.io == nil)
+
+        // The memory events' oomKill alone.
+        let linux = try #require(try read(storing: 3, at: PageLayout.linuxMemoryEvents + 24).linux)
+        let events = try #require(linux.memoryEvents)
+        #expect(events.oomKill == 3)
+        #expect(events.high == nil)
+        #expect(events.max == nil)
+        #expect(events.oom == nil)
+        #expect(linux.psi == nil)
+    }
 }
