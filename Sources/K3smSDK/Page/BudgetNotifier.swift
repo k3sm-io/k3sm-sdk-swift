@@ -103,7 +103,10 @@ public final class BudgetNotifier: Sendable {
     /// A stream of page reads: the current one first, then one after each
     /// `notifyEpoch` change. A read that is `torn` or `stale` is retried
     /// once, one writer period later, and the stream yields that second
-    /// result, error or snapshot. One dedicated thread feeds the stream and
+    /// result, error or snapshot. A writer that goes silent bumps no epoch,
+    /// so the stream also yields the `stale` error once the last snapshot
+    /// passes the page's staleness rule, and the next fresh read after that.
+    /// One dedicated thread feeds the stream and
     /// ends when the stream is cancelled or dropped. Only the newest element
     /// is buffered for a slow consumer, so it always sees the latest state.
     /// When the doorbell cannot be reopened for the thread, it waits on the
@@ -132,6 +135,12 @@ public final class BudgetNotifier: Sendable {
         into continuation: AsyncStream<Result<BudgetSnapshot, BudgetError>>.Continuation
     ) {
         var period: Int64 = 1
+        // When the last yield was a snapshot: the wall-clock second after
+        // which the page's staleness rule can call it stale. A hint for when
+        // to look again; read() decides.
+        var freshUntil: Int64?
+        // Whether the last yield was the stale error.
+        var yieldedStale = false
         func stopped() -> Bool { stop.value.load(ordering: .acquiring) }
         func emit() -> Bool {
             var r = page.read()
@@ -144,18 +153,62 @@ public final class BudgetNotifier: Sendable {
                 }
                 r = page.read()
             }
-            if case .success(let s) = r { period = s.writerPeriodSeconds }
+            note(r)
             if case .terminated = continuation.yield(r) { return false }
             return true
+        }
+        func note(_ r: Result<BudgetSnapshot, BudgetError>) {
+            switch r {
+            case .success(let s):
+                period = s.writerPeriodSeconds
+                freshUntil = staleAfter(s)
+                yieldedStale = false
+            case .failure(let e):
+                freshUntil = nil
+                yieldedStale = e == .stale
+            }
         }
 
         var epoch = page.loadNotifyEpoch()
         guard emit() else { return }
         while !stopped() {
-            guard let e = waitForChange(page, doorbell: doorbell, from: epoch, timeout: feederSlice) else { continue }
-            epoch = e
-            guard emit() else { return }
+            if let e = waitForChange(page, doorbell: doorbell, from: epoch, timeout: feederSlice) {
+                epoch = e
+                guard emit() else { return }
+                continue
+            }
+            // No epoch change. A writer that went silent never bumps the
+            // epoch, so the page's staleness rule is checked here: a
+            // snapshot past its fresh window is read again and, when stale,
+            // yielded as such; after a stale yield, the first fresh read is
+            // yielded.
+            if let until = freshUntil, wallSeconds() > until {
+                switch page.read() {
+                case .success(let s):
+                    note(.success(s)) // the writer is alive: nothing to yield
+                case .failure:
+                    guard emit() else { return }
+                }
+            } else if yieldedStale, case .success = page.read() {
+                guard emit() else { return }
+            }
         }
+    }
+
+    /// The last wall-clock second at which `s` is not stale by the page's
+    /// rule (age above `staleFactor` writer periods), saturating.
+    private static func staleAfter(_ s: BudgetSnapshot) -> Int64 {
+        let (limit, o1) = PageLayout.staleFactor.multipliedReportingOverflow(by: s.writerPeriodSeconds)
+        if o1 { return .max }
+        let (until, o2) = s.observedAt.addingReportingOverflow(limit)
+        return o2 ? (limit > 0 ? .max : .min) : until
+    }
+
+    /// The wall clock in Unix seconds, the clock read() checks staleness on.
+    private static func wallSeconds() -> Int64 {
+        var ts = timespec()
+        clock_gettime(CLOCK_REALTIME, &ts)
+        return Int64(ts.tv_sec)
     }
 
     /// Waits until the epoch differs from `from` or the timeout runs out.

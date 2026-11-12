@@ -61,9 +61,13 @@ do {
 
 Follow changes. The writer bumps the page's `notifyEpoch` word only when the
 level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
-on that word across processes. `changes()` yields the current read, then one
-read per change, from one thread of its own that ends when the stream is
-cancelled. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
+on that word across processes. With a doorbell file, the notifier also wakes
+on the doorbell, but still checks the word at least every 50 ms, so a missed
+doorbell write delays a change by at most that. `changes()` yields the current
+read, then one read per change, from one thread of its own that ends when the
+stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
+also yields the `stale` error once the last snapshot is older than the page's
+staleness rule allows, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
 call it from Swift concurrency:
 
 ```swift

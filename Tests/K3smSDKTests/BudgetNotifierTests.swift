@@ -114,6 +114,11 @@ private final class Waiter<T: Sendable>: @unchecked Sendable {
     }
 }
 
+/// The reads a `changes()` consumer collected.
+private final class Reads: Sendable {
+    let value = Mutex<[Result<BudgetSnapshot, BudgetError>]>([])
+}
+
 private func elapsed(_ body: () -> Void) -> Duration {
     ContinuousClock().measure(body)
 }
@@ -294,6 +299,36 @@ private final class WriterProcess {
             Issue.record("want stale, got \(String(describing: first))")
             return
         }
+    }
+
+    /// A writer that goes silent with no epoch bump still turns into a
+    /// yielded `stale` once the page's own staleness rule (three writer
+    /// periods since observedAt) says so.
+    @Test func changesYieldsStaleWhenWriterGoesSilent() async throws {
+        let w = try WritablePage()
+        // Two seconds old with a one-second period: fresh now, stale within
+        // about two seconds, then one re-read a period later.
+        w.store(PageLayout.writerPeriodSeconds, 1)
+        w.store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970) - 2))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        let deadline = ContinuousClock.now + .seconds(6)
+        func gotStale() -> Bool {
+            seen.value.withLock { $0.contains { if case .failure(.stale) = $0 { true } else { false } } }
+        }
+        while !gotStale(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let all = seen.value.withLock { $0 }
+        guard case .success = all.first else {
+            Issue.record("want a fresh first read, got \(String(describing: all.first))")
+            return
+        }
+        #expect(gotStale(), "no stale read yielded after the writer went silent: \(all)")
     }
 
     /// The gate: a reader in this process wakes on a notifyEpoch bump made by
