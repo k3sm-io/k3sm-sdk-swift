@@ -121,8 +121,9 @@ period later (one second until a snapshot has been read), and only that second
 result is yielded. A writer that goes silent bumps no epoch, so once the last
 snapshot is older than the page's staleness rule allows, `changes()` reads the
 page again. A read that succeeds yields nothing; one that fails is yielded,
-normally as the `stale` error, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
-call it from Swift concurrency. The `doorbellPath:` parameter of the
+normally as the `stale` error, and the next fresh read after that. `poll()`
+never blocks. `wait(timeout:)` blocks its thread, so never call it from Swift
+concurrency. The `doorbellPath:` parameter of the
 `BudgetNotifier` init is optional: it is the path of the doorbell file the
 producer provides, which the notifier opens for kqueue, and the init throws
 `BudgetError.notFound` if it cannot:
