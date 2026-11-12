@@ -28,6 +28,12 @@
 #      notifyEpoch and a reader here wakes, and a seq-only change with a wake
 #      is not reported
 #
+# Stages 10 to 12 filter swift test, which exits 0 when the filter matches
+# nothing; each run's output goes through hack/lib/test-count.sh (after its
+# self-test, hack/verify-test-count-selftest.sh), which fails a run that
+# executed no test, and in stage 12 one whose process-spawning test was
+# skipped or did not run.
+#
 # A stage name as the first argument runs that stage alone: --reader,
 # --sanitize, --version-check, --nodebudget, --notifier, and --stress,
 # --bench-rig (placeholders until their items land).
@@ -197,6 +203,17 @@ run_sanitizers() {
 	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} --sanitize=thread
 }
 
+# filtered_test <name> [--require <test>]...: run swift test --filter <name>,
+# then fail it if it executed no test (hack/lib/test-count.sh). The
+# environment of the call reaches swift test.
+filtered_test() {
+	local filter="$1"
+	shift
+	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+		--filter "$filter" 2>&1 | tee "$tmp/filtered-test.log"
+	bash hack/lib/test-count.sh "$tmp/filtered-test.log" "$@"
+}
+
 run_version_check() {
 	echo "==> version constants (hack/verify-version.sh)"
 	bash hack/verify-version-selftest.sh
@@ -208,15 +225,15 @@ run_nodebudget() {
 	bash hack/verify-fixtures.sh --self-test
 	bash hack/verify-fixtures.sh
 	if ! run_tests; then echo "    swift test skipped (no affected target)"; return 0; fi
-	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
-		--filter statusTypesCoverGoldenNodeBudgetDocuments
+	bash hack/verify-test-count-selftest.sh
+	filtered_test statusTypesCoverGoldenNodeBudgetDocuments
 }
 
 run_notifier() {
 	echo "==> change notifier (BudgetNotifierTests, integration)"
 	if ! run_tests; then echo "    skipped (no affected target)"; return 0; fi
-	K3SM_SDK_INTEGRATION=1 swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
-		--filter BudgetNotifierTests
+	bash hack/verify-test-count-selftest.sh
+	K3SM_SDK_INTEGRATION=1 filtered_test BudgetNotifierTests --require crossProcessWakeOnNotifyEpochOnly
 }
 
 run_reader() {
@@ -224,8 +241,8 @@ run_reader() {
 	bash hack/verify-fixtures.sh --self-test
 	bash hack/verify-fixtures.sh "$PWD/Tests/K3smSDKTests/Fixtures/page"
 	if ! run_tests; then echo "    swift test skipped (no affected target)"; return 0; fi
-	swift test ${SWIFT_FLAGS[@]+"${SWIFT_FLAGS[@]}"} ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
-		--filter BudgetPageReaderTests
+	bash hack/verify-test-count-selftest.sh
+	filtered_test BudgetPageReaderTests
 }
 
 case "$stage" in
