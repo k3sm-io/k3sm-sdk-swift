@@ -285,6 +285,43 @@ private final class WriterProcess {
         }
     }
 
+    /// A doorbell path that is a FIFO with no writer, or a directory, is
+    /// refused at once instead of blocking the init or being watched.
+    @Test func doorbellFifoWithNoWriterThrowsInsteadOfBlocking() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+
+        let dirBell = w.dir + "/bell.d"
+        try FileManager.default.createDirectory(atPath: dirBell, withIntermediateDirectories: false)
+        #expect(throws: BudgetError.notFound(errno: EISDIR)) {
+            try BudgetNotifier(page, doorbellPath: dirBell)
+        }
+
+        // The init runs on its own thread; if it has not returned within the
+        // bound, the test opens the FIFO for writing to release it and fails.
+        let fifo = w.dir + "/fifo.bell"
+        try #require(mkfifo(fifo, 0o600) == 0, "mkfifo errno \(errno)")
+        let result = Mutex<Result<Void, BudgetError>?>(nil)
+        let done = DispatchSemaphore(value: 0)
+        let opener = Thread {
+            let r = Result { () throws(BudgetError) in
+                _ = try BudgetNotifier(page, doorbellPath: fifo)
+            }
+            result.withLock { $0 = r }
+            done.signal()
+        }
+        opener.start()
+        if done.wait(timeout: .now() + 3) == .timedOut {
+            Issue.record("BudgetNotifier init blocked on a FIFO doorbell")
+            let wfd = Darwin.open(fifo, O_RDWR | O_NONBLOCK | O_CLOEXEC)
+            _ = done.wait(timeout: .now() + 3)
+            if wfd >= 0 { _ = close(wfd) }
+            return
+        }
+        let r = try #require(result.withLock { $0 })
+        #expect(throws: BudgetError.notFound(errno: EINVAL)) { try r.get() }
+    }
+
     /// changes() yields the current snapshot, then one per change, and its
     /// thread ends when the consumer cancels.
     @Test func changesYieldsSnapshotsAndEndsOnCancel() async throws {
