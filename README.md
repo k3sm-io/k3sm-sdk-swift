@@ -17,10 +17,10 @@ client is not here yet.
 ## Use it
 
 The SDK is a SwiftPM package with one library product, `K3smSDK`, for macOS 26
-and later. Pin it to the exact 40-character revision of a release tag, with the tag in a
-comment. Never use `from:`, an exact tag or a branch. The revision and the
-`v1.0.0` tag below are placeholders: the package version is 0.0.0 and there is
-no release yet.
+and later. Pin it to the exact 40-character revision of a release tag, with the
+tag in a comment. Never use `from:`, an exact tag or a branch. The revision and
+the `v1.0.0` tag below are placeholders: the package version is 0.0.0 and there
+is no release yet.
 
 ```swift
 dependencies: [
@@ -39,8 +39,8 @@ import K3smSDK
 print(K3smSDKVersion.string)
 ```
 
-Read the node budget page. The package declares macOS 26.0 or later and no
-other platform, and `BudgetPage.defaultPagePath` is the page's location there.
+Read the node budget page. The package manifest lists macOS 26.0 as its only
+platform, and `BudgetPage.defaultPagePath` is the page's location there.
 `BudgetPage.linuxPagePath` is where a reader on Linux finds the page (a VM
 guest, or a pod on a Linux producer's node); readers on Linux use the C++ SDK.
 `open` maps the page and checks its header, and throws `notFound` (with the
@@ -112,10 +112,10 @@ reverse. The C++ SDK chooses its wake source differently; its README says how.
 thread of its own that ends when the stream is cancelled. `changes()` opens
 its own doorbell from the same path, and if that open fails its thread waits
 on the word instead. A read that is `torn` or `stale` is read again one writer
-period later, and only that second result is yielded. A writer that goes
-silent bumps no epoch, so `changes()`
-also yields the `stale` error once the last snapshot is older than the page's
-staleness rule allows, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
+period later, and only that second result is yielded. A writer that goes silent
+bumps no epoch, so `changes()` also yields the `stale` error once the last
+snapshot is older than the page's staleness rule allows, and the next fresh read
+after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
 call it from Swift concurrency. The `doorbellPath:` parameter of the
 `BudgetNotifier` init is optional: it is the path of the doorbell file the
 producer provides, which the notifier opens for kqueue, and the init throws
@@ -160,7 +160,8 @@ hack/ci.sh --notifier   # only the notifier tests, the cross-process one include
 
 Requirements: Swift 6.0 or later as the minimum compiler (the package declares
 `swift-tools-version:6.0` and builds in the Swift 6 language mode; the Xcode
-Command Line Tools are enough) on macOS 26 or later. The SDK depends on nothing outside the toolchain.
+Command Line Tools are enough) on macOS 26 or later. The SDK depends on nothing
+outside the toolchain.
 
 ## Contributing
 
