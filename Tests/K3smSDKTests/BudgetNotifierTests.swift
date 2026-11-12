@@ -665,6 +665,32 @@ private final class WriterProcess {
         }
     }
 
+    /// When changes() cannot reopen the doorbell the notifier was built
+    /// with, its thread waits on the epoch word instead and still yields
+    /// each change.
+    @Test func changesFallsBackToTheWordWhenTheDoorbellCannotBeReopened() async throws {
+        let w = try WritablePage()
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path), doorbellPath: w.doorbellPath)
+        // A directory of the same name: the reopen in changes() is refused.
+        try FileManager.default.removeItem(atPath: w.doorbellPath)
+        try FileManager.default.createDirectory(atPath: w.doorbellPath, withIntermediateDirectories: false)
+        let (levels, feed) = AsyncStream.makeStream(of: NodeBudget.Level.self)
+        let task = Task {
+            for await r in n.changes() {
+                if case let .success(s) = r { feed.yield(s.level) }
+            }
+            feed.finish()
+        }
+        defer { task.cancel() }
+        let it = BoundedIterator(levels)
+        #expect(await it.next() == .ok)
+        w.publish(level: 3)
+        w.bumpEpoch()
+        w.wake()
+        #expect(await it.next() == .critical)
+    }
+
     /// A timeout too large to add to the clock waits with no deadline rather
     /// than returning at once.
     @Test func waitWithAMaximalTimeoutDoesNotReturnAtOnce() throws {
