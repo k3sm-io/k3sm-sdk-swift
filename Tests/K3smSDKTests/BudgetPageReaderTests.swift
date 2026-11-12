@@ -317,6 +317,32 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(PageLayout.requiredBodySize(minor: 7) == PageLayout.knownBodySize)
     }
 
+    /// The stand-in writer hard-codes the offsets it publishes at, since it is
+    /// a separate executable; each one it prints must be the descriptor's.
+    /// It spawns the writer without waiting for the integration switch on purpose,
+    /// because the spawn is hermetic and instant and the check should run in the plain test stage.
+    @Test func pageTestWriterOffsetsMatchDescriptor() throws {
+        let process = Process()
+        let out = Pipe()
+        process.executableURL = try pageTestWriterURL()
+        process.arguments = ["--offsets"]
+        process.standardOutput = out
+        try process.run()
+        let data = try out.fileHandleForReading.readToEnd() ?? Data()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        let want = Dictionary(uniqueKeysWithValues: try layoutLines().map { ($0.name, $0.offset) })
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+        var names: [String] = []
+        for line in lines {
+            let p = line.split(separator: "=").map(String.init)
+            try #require(p.count == 2, "writer line: \(line)")
+            #expect(Int(p[1]) == want[p[0]], "\(p[0])")
+            names.append(p[0])
+        }
+        #expect(names.sorted() == ["level", "notifyEpoch", "observedAt", "seq"])
+    }
+
     /// The gate test: every decodable golden page reads to the snapshot its
     /// manifest entry describes, built from the status goldens it was
     /// encoded from.

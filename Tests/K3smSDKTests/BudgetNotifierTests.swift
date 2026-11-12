@@ -165,6 +165,17 @@ private func elapsed(_ body: () -> Void) -> Duration {
     ContinuousClock().measure(body)
 }
 
+/// The PageTestWriter executable, built beside the test bundle, which is
+/// <build>/K3smSDKPackageTests.xctest/Contents/MacOS/<binary>.
+func pageTestWriterURL() throws -> URL {
+    var info = Dl_info()
+    guard dladdr(#dsohandle, &info) != 0, let image = info.dli_fname else { throw POSIXError(.ENOENT) }
+    var build = URL(fileURLWithPath: String(cString: image))
+    while build.pathExtension != "xctest", build.path != "/" { build.deleteLastPathComponent() }
+    build.deleteLastPathComponent()
+    return build.appendingPathComponent("PageTestWriter")
+}
+
 /// The stand-in writer process: the PageTestWriter executable, built beside
 /// the test bundle, driven one command line at a time.
 private final class WriterProcess {
@@ -173,13 +184,7 @@ private final class WriterProcess {
     private let stdout = Pipe()
 
     init(page: String) throws {
-        // The test bundle is <build>/K3smSDKPackageTests.xctest/Contents/MacOS/<binary>.
-        var info = Dl_info()
-        guard dladdr(#dsohandle, &info) != 0, let image = info.dli_fname else { throw POSIXError(.ENOENT) }
-        var build = URL(fileURLWithPath: String(cString: image))
-        while build.pathExtension != "xctest", build.path != "/" { build.deleteLastPathComponent() }
-        build.deleteLastPathComponent()
-        process.executableURL = build.appendingPathComponent("PageTestWriter")
+        process.executableURL = try pageTestWriterURL()
         process.arguments = [page]
         process.standardInput = stdin
         process.standardOutput = stdout
