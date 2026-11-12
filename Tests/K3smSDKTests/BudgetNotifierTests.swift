@@ -375,6 +375,38 @@ private final class WriterProcess {
         #expect(throws: BudgetError.notFound(errno: EINVAL)) { try r.get() }
     }
 
+    /// A failed doorbell open closes its descriptor: a doorbell path that is
+    /// a directory and one that is missing, a few hundred times each, leave
+    /// the process's descriptor count where it was. This suite is serialized
+    /// but other suites may run beside it, so the count is taken after a
+    /// warm-up round and the check allows a slack far below one descriptor
+    /// per failed construction.
+    @Test func failedDoorbellOpensLeakNoDescriptor() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let dirBell = w.dir + "/bell.d"
+        try FileManager.default.createDirectory(atPath: dirBell, withIntermediateDirectories: false)
+        let missing = w.dir + "/missing.bell"
+
+        let perRound = 300
+        func round() {
+            for _ in 0..<perRound {
+                #expect(throws: BudgetError.notFound(errno: EISDIR)) {
+                    try BudgetNotifier(page, doorbellPath: dirBell)
+                }
+                #expect(throws: BudgetError.notFound(errno: ENOENT)) {
+                    try BudgetNotifier(page, doorbellPath: missing)
+                }
+            }
+        }
+        round()
+        let before = openDescriptorCount()
+        round()
+        round()
+        let after = openDescriptorCount()
+        #expect(after - before < 64, "descriptors grew from \(before) to \(after)")
+    }
+
     /// changes() yields the current snapshot, then one per change, and its
     /// thread ends when the consumer cancels.
     @Test func changesYieldsSnapshotsAndEndsOnCancel() async throws {
@@ -710,4 +742,9 @@ private final class WriterProcess {
         }
         #expect(exercised >= 3)
     }
+}
+
+/// The number of open descriptors in this process, probed with F_GETFD.
+private func openDescriptorCount() -> Int {
+    (0..<Int32(min(getdtablesize(), 1 << 16))).reduce(0) { $0 + (fcntl($1, F_GETFD) >= 0 ? 1 : 0) }
 }
