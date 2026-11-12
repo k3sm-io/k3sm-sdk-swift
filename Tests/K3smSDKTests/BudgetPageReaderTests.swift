@@ -67,17 +67,25 @@ private final class ScratchPage {
     let base: UnsafeMutableRawPointer
     private let fd: Int32
 
-    init(copying fixture: String, edit: (UnsafeMutableRawPointer) -> Void = { _ in }) throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("k3sm-sdk-page-\(UUID().uuidString)")
+    init(
+        copying fixture: String, in parent: URL = FileManager.default.temporaryDirectory,
+        edit: (UnsafeMutableRawPointer) -> Void = { _ in }
+    ) throws {
+        let dir = parent.appendingPathComponent("k3sm-sdk-page-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // A class init that throws before every stored property is set never
+        // runs deinit, so a failure here removes the directory itself.
+        var ok = false
+        defer { if !ok { try? FileManager.default.removeItem(at: dir) } }
         path = dir.appendingPathComponent("budget.v1.page").path
         try FileManager.default.copyItem(atPath: fixturePath(fixture), toPath: path)
         fd = open(path, O_RDWR)
         guard fd >= 0, let m = mmap(nil, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0), m != MAP_FAILED else {
+            if fd >= 0 { close(fd) }
             throw POSIXError(.EIO)
         }
         base = m
+        ok = true
         edit(base)
     }
 
@@ -235,6 +243,17 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
 // MARK: - tests
 
 @Suite struct BudgetPageReaderTests {
+    @Test func scratchPageInitFailureLeavesNothingBehind() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-initfail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        #expect(throws: (any Error).self) {
+            _ = try ScratchPage(copying: "no-such-fixture.page", in: parent)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
+    }
+
     @Test func readerConstantsMatchManifest() throws {
         let m = try manifest()
         #expect(try manifestInt(m, "pageABIMajor") == Int64(K3smSDKVersion.pageABIMajor))
