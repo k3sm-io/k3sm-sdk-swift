@@ -656,4 +656,38 @@ private final class WriterProcess {
         #expect(n.poll() == live)
         #expect(n.poll() == nil)
     }
+
+    /// A seed behind the live word (the live epoch minus one, wrapping) is a
+    /// difference too: `poll()` reports the live epoch once and then nothing.
+    /// This pins the behind-by-one case; it does not by itself tell `!=` from
+    /// `>`, since a greater-than comparison also reports here.
+    @Test func seedBehindLiveWordReportsOnce() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let live = page.loadNotifyEpoch()
+        let n = try BudgetNotifier(page)
+        n.seed(live &- 1)
+        #expect(n.poll() == live)
+        #expect(n.poll() == nil)
+    }
+
+    /// The seeds are at the edges of the range; the live word is not (the test
+    /// helpers cannot set it to the top of the range). Each seed reports the
+    /// live epoch once, then nothing, without trapping. The ahead-of-live seeds
+    /// (`UInt64.max`, and `live + 1`) are the cases that fail under a
+    /// greater-than comparison.
+    @Test func seedAtRangeEdgesReportsOnceWithoutTrapping() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let live = page.loadNotifyEpoch()
+        var exercised = 0
+        for seed in [UInt64.max, 0, live &+ 1, live &- UInt64.max] where seed != live {
+            exercised += 1
+            let n = try BudgetNotifier(page)
+            n.seed(seed)
+            #expect(n.poll() == live)
+            #expect(n.poll() == nil)
+        }
+        #expect(exercised >= 3)
+    }
 }
