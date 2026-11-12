@@ -82,6 +82,11 @@ public final class BudgetPage: @unchecked Sendable {
     /// C++ SDK's errno values: `EISDIR` for a directory and `EINVAL` for
     /// any other non-regular file. A symlink at the path is followed, and
     /// its target is what is checked.
+    ///
+    /// It throws `notFound` when the file cannot be opened, examined or
+    /// mapped, `truncated` when the file is shorter than the header line or
+    /// its header and body, and `abiMismatch` when the magic, the ABI major
+    /// or the header size is not one this SDK reads.
     public static func open(path: String) throws(BudgetError) -> BudgetPage {
         // O_NONBLOCK keeps a FIFO without a writer from blocking the open;
         // the type check below then refuses it.
