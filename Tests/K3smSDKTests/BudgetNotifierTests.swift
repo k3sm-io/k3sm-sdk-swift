@@ -611,4 +611,16 @@ private final class WriterProcess {
         #expect(Set(observed).union(coalesced) == Set(published))
         #expect(observed == observed.sorted())
     }
+
+    /// A seed ahead of the live word is still a difference: `poll()` reports
+    /// the live epoch once and then nothing.
+    @Test func seedAheadOfLiveWordReportsOnce() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let live = page.loadNotifyEpoch()
+        let n = try BudgetNotifier(page)
+        n.seed(live &+ 5)
+        #expect(n.poll() == live)
+        #expect(n.poll() == nil)
+    }
 }
