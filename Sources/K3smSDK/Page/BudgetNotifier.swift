@@ -215,7 +215,10 @@ public final class BudgetNotifier: Sendable {
     private static func waitForChange(
         _ page: BudgetPage, doorbell: Doorbell?, from: UInt64, timeout: Duration
     ) -> UInt64? {
-        let deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &+ timeout.nanoseconds
+        // A timeout past the end of the clock saturates: the wait has no
+        // deadline.
+        let (end, overflow) = clock_gettime_nsec_np(CLOCK_UPTIME_RAW).addingReportingOverflow(timeout.nanoseconds)
+        let deadline = overflow ? UInt64.max : end
         while true {
             let e = page.loadNotifyEpoch()
             if e != from { return e }
