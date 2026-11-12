@@ -117,10 +117,11 @@ reverse. The C++ SDK chooses its wake source differently; its README says how.
 thread of its own that ends when the stream is cancelled. `changes()` opens
 its own doorbell from the same path, and if that open fails its thread waits
 on the word instead. A read that is `torn` or `stale` is read again one writer
-period later, and only that second result is yielded. A writer that goes silent
-bumps no epoch, so `changes()` also yields the `stale` error once the last
-snapshot is older than the page's staleness rule allows, and the next fresh read
-after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
+period later (one second until a snapshot has been read), and only that second
+result is yielded. A writer that goes silent bumps no epoch, so once the last
+snapshot is older than the page's staleness rule allows, `changes()` reads the
+page again. A read that succeeds yields nothing; one that fails is yielded,
+normally as the `stale` error, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
 call it from Swift concurrency. The `doorbellPath:` parameter of the
 `BudgetNotifier` init is optional: it is the path of the doorbell file the
 producer provides, which the notifier opens for kqueue, and the init throws
