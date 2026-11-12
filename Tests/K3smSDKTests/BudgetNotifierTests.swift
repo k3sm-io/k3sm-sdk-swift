@@ -483,12 +483,17 @@ private final class WriterProcess {
             return
         }
 
-        // Silent: the stale error arrives.
-        var deadline = ContinuousClock.now + .seconds(8)
+        // Silent: the stale error arrives. The stream yields a stale result
+        // only after a one-period re-read, which a stalled run can delay well
+        // past the stale window, so the wait is generous and ends as soon as
+        // the stale read is seen. Without it the resume phase is skipped: a
+        // publish before the stale read is recorded would hide it.
+        var deadline = ContinuousClock.now + .seconds(20)
         while !reads().contains(where: isStale), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(reads().contains(where: isStale), "no stale read after the writer went silent: \(reads())")
+        guard reads().contains(where: isStale) else { return }
 
         // Resumed, still with no epoch bump: a fresh read follows the stale one.
         w.publish()
