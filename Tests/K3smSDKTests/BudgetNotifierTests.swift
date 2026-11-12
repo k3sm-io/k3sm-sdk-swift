@@ -188,6 +188,34 @@ private final class WriterProcess {
         #expect(n.notifyEpoch == 1)
     }
 
+    /// A bump between reading a snapshot and creating the notifier is
+    /// taken as seen at `init`; seeding with the snapshot's epoch reports it.
+    @Test func seedFromSnapshotReportsInterveningChange() throws {
+        let w = try WritablePage()
+        w.publish()
+        let page = try BudgetPage.open(path: w.path)
+        let snapshot = try page.read().get()
+        w.bumpEpoch()
+
+        let unseeded = try BudgetNotifier(page)
+        #expect(unseeded.poll() == nil)
+
+        let n = try BudgetNotifier(page)
+        n.seed(snapshot.notifyEpoch)
+        #expect(n.notifyEpoch == snapshot.notifyEpoch)
+        #expect(n.poll() == snapshot.notifyEpoch &+ 1)
+        #expect(n.poll() == nil)
+
+        let live = try BudgetNotifier(page)
+        live.seed(page.loadNotifyEpoch())
+        #expect(live.poll() == nil)
+
+        let waiter = try BudgetNotifier(page)
+        waiter.seed(snapshot.notifyEpoch)
+        #expect(waiter.wait(timeout: .milliseconds(200)) == snapshot.notifyEpoch &+ 1)
+        #expect(waiter.wait(timeout: .zero) == nil)
+    }
+
     @Test func waitTimesOutWithoutAChange() throws {
         let w = try WritablePage()
         let n = try BudgetNotifier(try BudgetPage.open(path: w.path))

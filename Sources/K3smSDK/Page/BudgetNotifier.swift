@@ -81,6 +81,27 @@ public final class BudgetNotifier: Sendable {
     /// The last epoch this notifier reported, or the epoch at `init`.
     public var notifyEpoch: UInt64 { lastSeen.withLock { $0 } }
 
+    /// Sets the last reported epoch to `epoch`, the `notifyEpoch` of a
+    /// snapshot the caller already read. A bump between that read and this
+    /// notifier's `init` is then reported by the next `poll()` or
+    /// `wait(timeout:)` instead of being taken as already seen. Any epoch
+    /// different from the live word, one ahead of it included, makes the
+    /// next `poll()` or `wait(timeout:)` report a change once; the live
+    /// epoch reports nothing. A `changes()` stream already running keeps
+    /// its own epoch and is not affected.
+    ///
+    /// The epoch is set under the notifier's lock, so calling this from any
+    /// thread is safe. A `wait(timeout:)` already in progress is not
+    /// affected: it compares against the epoch it read when it started, and
+    /// when it returns a change it overwrites the seeded epoch with that
+    /// change. For a predictable result, seed before the first `poll()` or
+    /// `wait(timeout:)`. Unlike the C++ SDK's `seed`, which must be called
+    /// before the first poll or wait on the waiting thread, this one is safe
+    /// to call from any thread.
+    public func seed(_ epoch: UInt64) {
+        lastSeen.withLock { $0 = epoch }
+    }
+
     /// The new `notifyEpoch` when it changed since the last report, else
     /// nil. It never blocks.
     public func poll() -> UInt64? {

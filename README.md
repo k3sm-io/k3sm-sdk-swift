@@ -51,6 +51,7 @@ do {
         if let room = snapshot.bytesUntil(signal: .memoryAvailable, rung: .admitStop) {
             print("bytes until admit-stop:", room)
         }
+        print("slots of 512 MiB:", snapshot.batchSlots(slotBytes: 512 * 1024 * 1024))
     case .failure(let error):
         print("no stable read:", error)
     }
@@ -58,6 +59,13 @@ do {
     print("cannot open the page:", error)
 }
 ```
+
+`bytesUntil(signal:rung:)` returns nil for a signal that is not measured in
+bytes, such as a permille or a count, and treats a negative value or threshold
+as 0. `batchSlots(slotBytes:)` returns an `Int64`: how many slots of that size
+fit in the recommendation's safe additional bytes. It returns 0 when the node
+does not admit, when the page carries no positive recommendation, or when the
+slot size is not positive.
 
 Follow changes. The writer bumps the page's `notifyEpoch` word only when the
 level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
@@ -68,7 +76,10 @@ read, then one read per change, from one thread of its own that ends when the
 stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
 staleness rule allows, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
-call it from Swift concurrency:
+call it from Swift concurrency. The `doorbellPath:` parameter of the
+`BudgetNotifier` init is optional: it is the path of the doorbell file the
+producer provides, which the notifier opens for kqueue, and the init throws
+`BudgetError.notFound` if it cannot:
 
 ```swift
 let notifier = try BudgetNotifier(try BudgetPage.open(path: BudgetPage.defaultPagePath))
@@ -76,6 +87,24 @@ for await read in notifier.changes() {
     if case .success(let snapshot) = read {
         print("level:", snapshot.level, "admit:", snapshot.admitOK)
     }
+}
+```
+
+A notifier starts from the epoch the page holds at `init`, so a change that
+lands after you read a snapshot and before you create the notifier would be
+taken as already seen. Seed it with the snapshot's `notifyEpoch` and the next
+`poll()` or `wait(timeout:)` reports that change. Unlike the C++ SDK's
+`seed`, which must be called before the first poll or wait on the waiting
+thread, this one is safe to call from any thread. Seeding does not affect a
+`changes()` stream, which tracks its own epoch:
+
+```swift
+let page = try BudgetPage.open(path: BudgetPage.defaultPagePath)
+let snapshot = try page.read().get()
+let notifier = try BudgetNotifier(page)
+notifier.seed(snapshot.notifyEpoch)
+if let epoch = notifier.poll() {
+    print("changed since the snapshot, now at epoch", epoch)
 }
 ```
 
