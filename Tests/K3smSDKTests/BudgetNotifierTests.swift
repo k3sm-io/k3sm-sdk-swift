@@ -382,10 +382,8 @@ private final class WriterProcess {
 
     /// A failed doorbell open closes its descriptor: a doorbell path that is
     /// a directory and one that is missing, a few hundred times each, leave
-    /// the process's descriptor count where it was. This suite is serialized
-    /// but other suites may run beside it, so the count is taken after a
-    /// warm-up round and the check allows a slack far below one descriptor
-    /// per failed construction.
+    /// the process's descriptor count where it was (the counting protocol is
+    /// on `openDescriptorCount`).
     @Test func failedDoorbellOpensLeakNoDescriptor() throws {
         let w = try WritablePage()
         let page = try BudgetPage.open(path: w.path)
@@ -409,7 +407,7 @@ private final class WriterProcess {
         round()
         round()
         let after = openDescriptorCount()
-        #expect(after - before < 64, "descriptors grew from \(before) to \(after)")
+        #expect(after - before < descriptorCountSlack, "descriptors grew from \(before) to \(after)")
     }
 
     /// changes() yields the current snapshot, then one per change, and its
@@ -846,9 +844,4 @@ private func threadCPUNanoseconds() -> UInt64 {
     var ts = timespec()
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)
     return UInt64(ts.tv_sec) * 1_000_000_000 + UInt64(ts.tv_nsec)
-}
-
-/// The number of open descriptors in this process, probed with F_GETFD.
-private func openDescriptorCount() -> Int {
-    (0..<Int32(min(getdtablesize(), 1 << 16))).reduce(0) { $0 + (fcntl($1, F_GETFD) >= 0 ? 1 : 0) }
 }
