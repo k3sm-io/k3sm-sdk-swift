@@ -190,6 +190,33 @@ private func put(_ base: UnsafeMutableRawPointer, _ offset: Int, _ value: UInt64
         #expect(throws: BudgetError.corrupt) { try long.read(now: now).get() }
     }
 
+    /// A field the reader must have and cannot use is corrupt: a node name
+    /// that is not UTF-8, a writer period below one, a zero platform or
+    /// level code, and a set signal id with a zero unit.
+    @Test func invalidRequiredFieldIsCorrupt() throws {
+        let now = try fixtureObservedAt()
+        let cases: [(name: String, edit: (UnsafeMutableRawPointer) -> Void)] = [
+            ("node name not UTF-8", { base in
+                base.storeBytes(of: UInt8(0xFF), toByteOffset: PageLayout.nodeName, as: UInt8.self)
+                base.storeBytes(of: UInt8(0xFE), toByteOffset: PageLayout.nodeName + 1, as: UInt8.self)
+                put(base, PageLayout.nodeNameLen, 2)
+            }),
+            ("writer period 0", { put($0, PageLayout.writerPeriodSeconds, 0) }),
+            ("writer period -1", { put($0, PageLayout.writerPeriodSeconds, UInt64(bitPattern: -1)) }),
+            ("platform 0", { put($0, PageLayout.platform, 0) }),
+            ("level 0", { put($0, PageLayout.level, 0) }),
+            ("signal unit 0", { put($0, PageLayout.signals + 8, 0) }),
+        ]
+        // The baseline reads and its first signal slot is set, so each
+        // corrupt read below is the edit's alone.
+        let want = try ParityPage().read(now: now).get()
+        try #require(!want.signals.isEmpty)
+        for c in cases {
+            let page = try ParityPage(edit: c.edit)
+            #expect(throws: BudgetError.corrupt, "\(c.name)") { try page.read(now: now).get() }
+        }
+    }
+
     /// The seqlock bound is exact: a writer that settles in time for the
     /// last allowed attempt reads, one that settles an attempt later is torn.
     @Test func tornBoundaryIsExact() throws {
