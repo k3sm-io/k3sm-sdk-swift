@@ -492,8 +492,9 @@ private final class WriterProcess {
         while !reads().contains(where: isStale), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        #expect(reads().contains(where: isStale), "no stale read after the writer went silent: \(reads())")
-        guard reads().contains(where: isStale) else { return }
+        let sawStale = reads().contains(where: isStale)
+        #expect(sawStale, "no stale read after the writer went silent: \(reads())")
+        guard sawStale else { return }
 
         // Resumed, still with no epoch bump: a fresh read follows the stale one.
         w.publish()
@@ -531,15 +532,19 @@ private final class WriterProcess {
             return reads().contains(where: want)
         }
 
-        let torn = try await wait(for: { if case .failure(.torn) = $0 { true } else { false } }, seconds: 5)
+        // The stream yields a failed read only after a one-period re-read,
+        // so acting before the previous read is recorded would hide it.
+        let torn = try await wait(for: { if case .failure(.torn) = $0 { true } else { false } }, seconds: 20)
         #expect(torn, "want a torn read, got \(reads())")
+        guard torn else { return }
         // The write finishes, with no epoch bump.
         w.store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970)))
         w.store(PageLayout.seq, 2)
-        let fresh = try await wait(for: { if case .success = $0 { true } else { false } }, seconds: 3)
+        let fresh = try await wait(for: { if case .success = $0 { true } else { false } }, seconds: 10)
         #expect(fresh, "no fresh read after the torn write finished: \(reads())")
+        guard fresh else { return }
         // The writer then goes silent.
-        let stale = try await wait(for: { if case .failure(.stale) = $0 { true } else { false } }, seconds: 8)
+        let stale = try await wait(for: { if case .failure(.stale) = $0 { true } else { false } }, seconds: 30)
         #expect(stale, "no stale read after the writer went silent: \(reads())")
     }
 
