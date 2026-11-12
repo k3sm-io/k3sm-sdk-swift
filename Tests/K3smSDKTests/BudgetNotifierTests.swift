@@ -656,4 +656,31 @@ private final class WriterProcess {
         #expect(n.poll() == live)
         #expect(n.poll() == nil)
     }
+
+    /// A seed behind the live word (the live epoch minus one, wrapping) is a
+    /// difference too: `poll()` reports the live epoch once and then nothing.
+    @Test func seedBehindLiveWordReportsOnce() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let live = page.loadNotifyEpoch()
+        let n = try BudgetNotifier(page)
+        n.seed(live &- 1)
+        #expect(n.poll() == live)
+        #expect(n.poll() == nil)
+    }
+
+    /// At the ends of the epoch range the notifier compares with `!=`, so the
+    /// wrap is not a trap: a seed of `UInt64.max` and a seed that is the live
+    /// word's wrapping neighbour each report the live epoch once, then nothing.
+    @Test func seedAtEpochRangeEdgesReportsOnceWithoutTrapping() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let live = page.loadNotifyEpoch()
+        for seed in [UInt64.max, 0, live &+ UInt64.max, live &- UInt64.max] where seed != live {
+            let n = try BudgetNotifier(page)
+            n.seed(seed)
+            #expect(n.poll() == live)
+            #expect(n.poll() == nil)
+        }
+    }
 }
