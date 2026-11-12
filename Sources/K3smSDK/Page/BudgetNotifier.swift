@@ -47,7 +47,7 @@ public final class BudgetNotifier: Sendable {
     public let doorbellPath: String?
 
     private let lastSeen: Mutex<UInt64>
-    private let doorbell: Doorbell?
+    let doorbell: Doorbell?
 
     /// How long the `changes()` thread waits before it checks whether its
     /// stream was cancelled.
@@ -329,7 +329,7 @@ extension Atomic where Value == Bool {
 }
 
 /// A kqueue watching the producer's doorbell file for writes.
-private final class Doorbell: Sendable {
+final class Doorbell: Sendable {
     private let fd: Int32
     private let kq: Int32
     private let broken = Atomic<Bool>(false)
@@ -376,6 +376,13 @@ private final class Doorbell: Sendable {
 
     /// Marks the doorbell as one that cannot be waited on.
     func markBroken() { broken.store(true, ordering: .relaxed) }
+
+    /// A test hook: puts the doorbell file's descriptor over the kqueue
+    /// descriptor with `dup2`, so every later kevent wait on it fails. Both
+    /// numbers stay open, and the destructor closes both.
+    func breakQueueForTesting() {
+        precondition(dup2(fd, kq) >= 0)
+    }
 
     /// Blocks until the doorbell is written or the time runs out. A write
     /// between the caller's check and this call is kept by the kqueue, so
