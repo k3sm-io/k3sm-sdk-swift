@@ -5,12 +5,14 @@
 # ci.sh -- the k3sm Swift SDK's gate. Run from anywhere; it works on a lone clone.
 #
 #   0. the package declares no dependencies (hack/lib/no-deps.sh on the
-#      show-dependencies stdout, after hack/verify-no-deps-selftest.sh)
+#      show-dependencies stdout, after hack/verify-no-deps-selftest.sh, which
+#      runs on every run); it also fails when `swift package
+#      show-dependencies` itself fails and when a Package.resolved carries pins
 #   1. swift build
 #   2. swift test (the version constants are pinned)
 #   3. build a consumer package that depends on a git clone of this checkout
 #      by .package(url: "file://...", revision: "<sha>") and imports K3smSDK
-#   4. shellcheck over every hack/**/*.sh
+#   4. shellcheck over every hack/**/*.sh, except files under a testdata directory
 #   5. every .swift file carries the Apache-2.0 header
 #   6. every file under .github/workflows/ is dormant (fully commented out)
 #   7. the dependency supply-chain check: its self-test, then the live tree
@@ -29,9 +31,13 @@
 #      notifyEpoch and a reader here wakes, and a seq-only change with a wake
 #      is not reported
 #
+# The run then ends with the placeholder stages (--stress, --bench-rig), which
+# only print a notice.
+#
 # Stages 10 to 12 filter swift test, which exits 0 when the filter matches
 # nothing; each run's output goes through hack/lib/test-count.sh (after its
-# self-test, hack/verify-test-count-selftest.sh), which fails a run that
+# self-test, hack/verify-test-count-selftest.sh, which each of those stages
+# runs just before its filtered swift test), which fails a run that
 # executed no test, and in stage 12 one whose process-spawning test was
 # skipped or did not run. Stage 2, the full default run, calls an unfiltered
 # swift test and so does not go through the count helper.
@@ -51,10 +57,11 @@
 # the full gate. Only when the diff holds doc files alone (*.md, docs/, LICENSE,
 # NOTICE, DCO) is every swift test run skipped. Markdown under Sources/ or Tests/,
 # or anything inside a .docc catalog, is not a doc: SwiftPM can read it as a
-# resource, fixture or documentation catalog, so it takes the full gate. The skip
-# covers stages 2 and 9, and the swift test
-# of stages 10 to 12); every other stage runs, the fixture checks of stages 10 and
-# 11 included. --dry-run resolves the mode, prints the plan and exits before any
+# resource, fixture or documentation catalog, so it takes the full gate. On such a
+# doc-only run the skip covers stages 2 and 9 and the swift test of stages 10 to
+# 12, and the count helper and its self-test are skipped with that swift test.
+# Every other stage runs, the fixture checks of stages 10 and 11 included.
+# --dry-run resolves the mode, prints the plan and exits before any
 # stage runs. The mode flags go with the full run only, not with a stage name.
 #
 # K3SM_SWIFTPM_DISABLE_SANDBOX=1 passes --disable-sandbox to every swift
