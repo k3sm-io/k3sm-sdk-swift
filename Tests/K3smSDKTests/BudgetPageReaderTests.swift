@@ -807,8 +807,9 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
             }
             return try BudgetPage.open(path: scratch.path).read(now: now)
         }
-        // 3 * period overflows: fresh.
-        #expect(try read(observedAt: 0, period: Int64.max, now: 1_000_000).get().observedAt == 0)
+        // 3 * period overflows: fresh. This period wraps 3 * period to
+        // Int64.min + 1, so a wrapping limit would call any age stale.
+        #expect(try read(observedAt: 0, period: Int64.max / 3 + 1, now: 1_000_000).get().observedAt == 0)
         // now - observedAt overflows upward: stale.
         #expect(throws: BudgetError.stale) { try read(observedAt: Int64.min, period: 1, now: Int64.max).get() }
         // now - observedAt overflows downward: a clock behind the writer's, fresh.
@@ -816,18 +817,31 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
     }
 
     /// A file longer than a page maps only the first page and reads the same
-    /// snapshot as the plain fixture.
+    /// snapshot as the plain fixture. The mapped length is observed through
+    /// the header check: a body size that ends past the first page but
+    /// inside the file is truncated, which a whole-file mapping would accept.
     @Test func openMapsOnlyOnePageOfAnOversizeFile() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("k3sm-sdk-page-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let path = dir.appendingPathComponent("budget.v1.page").path
-        var bytes = try Data(contentsOf: URL(fileURLWithPath: fixturePath("darwin.v1.page")))
-        bytes.append(Data(count: 3 * PageLayout.pageSize))
-        try bytes.write(to: URL(fileURLWithPath: path))
+        func write(_ name: String, bodySize: UInt32? = nil) throws -> String {
+            let path = dir.appendingPathComponent(name).path
+            var bytes = try Data(contentsOf: URL(fileURLWithPath: fixturePath("darwin.v1.page")))
+            bytes.append(Data(count: 3 * PageLayout.pageSize))
+            if let bodySize {
+                withUnsafeBytes(of: bodySize.littleEndian) { bytes.replaceSubrange(
+                    PageLayout.bodySizeOffset..<PageLayout.bodySizeOffset + 4, with: $0) }
+            }
+            try bytes.write(to: URL(fileURLWithPath: path))
+            return path
+        }
         let want = try readFixture("darwin.v1.page").get()
-        let got = try BudgetPage.open(path: path).read(now: want.observedAt).get()
+        let got = try BudgetPage.open(path: write("budget.v1.page")).read(now: want.observedAt).get()
         #expect(got == want)
+
+        let pastPage = UInt32(PageLayout.pageSize - PageLayout.headerSize + 8)
+        let long = try write("long.v1.page", bodySize: pastPage)
+        #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: long) }
     }
 }

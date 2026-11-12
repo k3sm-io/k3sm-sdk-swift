@@ -114,6 +114,39 @@ private final class Waiter<T: Sendable>: @unchecked Sendable {
     }
 }
 
+/// An `AsyncStream` iterator whose `next` is bounded: a yield that never
+/// comes records an issue after `seconds` instead of hanging the test.
+private final class BoundedIterator<Element: Sendable>: @unchecked Sendable {
+    private var it: AsyncStream<Element>.Iterator
+
+    init(_ stream: AsyncStream<Element>) { it = stream.makeAsyncIterator() }
+
+    /// The next element, or nil when the stream ended; a timeout records an
+    /// issue and returns nil, so it fails the test either way.
+    func next(within seconds: Double = 5, sourceLocation: SourceLocation = #_sourceLocation) async -> Element? {
+        let got: Element?? = await withTaskGroup(of: Element??.self) { group in
+            group.addTask {
+                var it = self.it
+                let e = await it.next()
+                self.it = it
+                return .some(e)
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(seconds))
+                return .none
+            }
+            let first = await group.next() ?? .none
+            group.cancelAll()
+            return first
+        }
+        guard let got else {
+            Issue.record("no element within \(seconds) s", sourceLocation: sourceLocation)
+            return nil
+        }
+        return got
+    }
+}
+
 /// The reads a `changes()` consumer collected.
 private final class Reads: Sendable {
     let value = Mutex<[Result<BudgetSnapshot, BudgetError>]>([])
@@ -335,7 +368,7 @@ private final class WriterProcess {
             }
             feed.finish()
         }
-        var it = levels.makeAsyncIterator()
+        let it = BoundedIterator(levels)
         let first = await it.next()
         #expect(first == .ok)
         w.publish()
@@ -360,7 +393,7 @@ private final class WriterProcess {
         let w = try WritablePage(fresh: false)
         let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
         let start = ContinuousClock.now
-        var it = n.changes().makeAsyncIterator()
+        let it = BoundedIterator(n.changes())
         let first = await it.next()
         #expect(ContinuousClock.now - start >= .seconds(1))
         guard case .failure(.stale) = first else {
