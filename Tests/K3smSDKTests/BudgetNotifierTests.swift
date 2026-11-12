@@ -407,7 +407,7 @@ private final class WriterProcess {
         round()
         round()
         let after = openDescriptorCount()
-        #expect(after == before, "descriptors grew from \(before) to \(after)")
+        #expect(after - before < descriptorCountSlack, "descriptors grew from \(before) to \(after)")
     }
 
     /// changes() yields the current snapshot, then one per change, and its

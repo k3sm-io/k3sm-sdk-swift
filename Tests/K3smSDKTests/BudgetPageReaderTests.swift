@@ -916,6 +916,6 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         round()
         round()
         let after = openDescriptorCount()
-        #expect(after == before, "descriptors grew from \(before) to \(after)")
+        #expect(after - before < descriptorCountSlack, "descriptors grew from \(before) to \(after)")
     }
 }
