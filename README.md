@@ -39,11 +39,12 @@ import K3smSDK
 print(K3smSDKVersion.string)
 ```
 
-Read the node budget page. `BudgetPage.defaultPagePath` is the page's location
-for the platform the SDK is built for. The package declares macOS 26.0 or
-later, and `BudgetPage.linuxPagePath` is where a reader on Linux finds the
-page. `open` maps the page and checks its header, and throws `notFound` (with
-the errno), `truncated` or `abiMismatch`.
+Read the node budget page. The package declares macOS 26.0 or later and no
+other platform, and `BudgetPage.defaultPagePath` is the page's location there.
+`BudgetPage.linuxPagePath` is where a reader on Linux finds the page (a VM
+guest, or a pod on a Linux producer's node); readers on Linux use the C++ SDK.
+`open` maps the page and checks its header, and throws `notFound` (with the
+errno), `truncated` or `abiMismatch`.
 `read()` reports `corrupt`, `torn` and `stale`, and can also report
 `abiMismatch` or `truncated` if a writer takes the page over. A page is stale
 when its observation is more than three writer periods old:
@@ -106,8 +107,7 @@ slices of at most 24 hours, and after a failed wait the notifier sleeps 10 ms
 and checks the word again. With a doorbell file, after a failed doorbell wait
 the notifier stops using the doorbell and checks the word every 100 ms. It
 never switches from waiting on the word to waiting on the doorbell, or the
-reverse. The C++ SDK differs: there the word is the primary wake source and
-the doorbell the fallback, with an argument to prefer the doorbell.
+reverse. The C++ SDK chooses its wake source differently; its README says how.
 `changes()` yields the current read, then one read per change, from one
 thread of its own that ends when the stream is cancelled. `changes()` opens
 its own doorbell from the same path, and if that open fails its thread waits
