@@ -980,4 +980,55 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(events.oom == nil)
         #expect(linux.psi == nil)
     }
+
+    /// A darwin page keeps a Linux block once any one Linux word is present:
+    /// the fixture decodes with none, then the first PSI word alone, and
+    /// separately the last memory-events word alone, makes it present with
+    /// that value read back.
+    @Test func aLoneLinuxWordOnADarwinPageIsKept() throws {
+        let observedAt = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        func read(storing value: Int64? = nil, at offset: Int = 0) throws -> BudgetSnapshot {
+            let scratch = try ScratchPage(copying: "darwin.v1.page") { base in
+                guard let value else { return }
+                base.storeBytes(of: UInt64(bitPattern: value).littleEndian, toByteOffset: offset, as: UInt64.self)
+            }
+            return try BudgetPage.open(path: scratch.path).read(now: observedAt).get()
+        }
+
+        let plain = try read()
+        #expect(plain.platform == .darwin)
+        #expect(plain.linux == nil)
+
+        // The first PSI word: cpu.some.avg10Permille.
+        let psiPage = try read(storing: 42, at: PageLayout.linuxPSI)
+        #expect(psiPage.platform == .darwin)
+        let psi = try #require(psiPage.linux?.psi)
+        #expect(psi.cpu?.some?.avg10Permille == 42)
+        #expect(psi.cpu?.some?.avg60Permille == nil)
+        #expect(psi.cpu?.full == nil)
+        #expect(psiPage.linux?.memoryEvents == nil)
+
+        // The last memory-events word: oomKill.
+        let eventsPage = try read(storing: 5, at: PageLayout.linuxMemoryEvents + 24)
+        #expect(eventsPage.platform == .darwin)
+        let linux = try #require(eventsPage.linux)
+        #expect(linux.memoryEvents?.oomKill == 5)
+        #expect(linux.memoryEvents?.oom == nil)
+        #expect(linux.psi == nil)
+    }
+
+    /// A file shorter than the header is truncated at open: the first 8, 23
+    /// and 63 bytes of the darwin fixture fail the open's size guard, and
+    /// exactly 64 bytes, which passes it, fails the header's size check.
+    @Test(arguments: [8, 23, 63, 64])
+    func aPageShorterThanTheHeaderIsTruncated(bytes: Int) throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-page-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let full = try Data(contentsOf: URL(fileURLWithPath: fixturePath("darwin.v1.page")))
+        let path = dir.appendingPathComponent("short.v1.page")
+        try full.prefix(bytes).write(to: path)
+        #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: path.path) }
+    }
 }
