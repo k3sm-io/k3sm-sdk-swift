@@ -41,8 +41,13 @@ print(K3smSDKVersion.string)
 
 Read the node budget page. The package manifest lists macOS 26.0 as its only
 platform, and `BudgetPage.defaultPagePath` is the page's location there.
+`BudgetPage.darwinPagePath` is where a native Darwin pod finds the page, and
+`defaultPagePath` is that path on macOS.
 `BudgetPage.linuxPagePath` is where a reader on Linux finds the page (a VM
 guest, or a pod on a Linux producer's node); readers on Linux use the C++ SDK.
+An opened `BudgetPage` reports its `path`, `abiMajor`, `abiMinor`,
+`headerSize` and `bodySize`; `abiMinor` and `bodySize` are read from the page
+on each access.
 `open` maps the page and checks its header, and throws `notFound` (with the
 errno), `truncated` or `abiMismatch`.
 `read()` reports `corrupt`, `torn` and `stale`, and can also report
@@ -129,6 +134,10 @@ for await read in notifier.changes() {
     }
 }
 ```
+
+`BudgetNotifier.notifyEpoch` starts as the epoch at `init` and is then the
+last epoch `poll()` or `wait(timeout:)` reported, or the one `seed(_:)` set;
+a `changes()` stream keeps its own epoch and does not move it.
 
 A notifier starts from the epoch the page holds at `init`, so a change that
 lands after you read a snapshot and before you create the notifier would be
