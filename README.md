@@ -156,12 +156,23 @@ swift test
 hack/ci.sh          # the full gate
 hack/ci.sh --sanitize   # only the address, undefined-behavior and thread sanitizer runs
 hack/ci.sh --notifier   # only the notifier tests, the cross-process one included
+hack/ci.sh --reader     # only the page reader tests and their fixtures
+hack/ci.sh --nodebudget # only the NodeBudget fixture checks and test
+hack/ci.sh --version-check # only the version constants against a release tag on HEAD
 ```
+
+The full gate checks that the package declares no dependencies, builds, runs the
+tests, builds a consumer package that pins this checkout by revision, runs
+shellcheck, checks the license headers and that the workflows are dormant, runs
+the supply-chain check and the version check, runs the tests under the address,
+undefined-behavior and thread sanitizers, and then the NodeBudget, page reader
+and notifier stages.
 
 Requirements: Swift 6.0 or later as the minimum compiler (the package declares
 `swift-tools-version:6.0` and builds in the Swift 6 language mode; the Xcode
 Command Line Tools are enough) on macOS 26 or later. The SDK depends on nothing
-outside the toolchain.
+outside the toolchain. The full gate, unlike the plain build, also needs
+`shellcheck` on your `PATH` and the toolchain's clang UBSan runtime.
 
 ## Contributing
 
