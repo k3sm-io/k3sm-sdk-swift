@@ -644,6 +644,48 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(throws: BudgetError.abiMismatch) { try readFixture("negative/unknown-major.v1.page").get() }
     }
 
+    /// Every structural code site reads the last code of its table and
+    /// refuses the first code past it as an ABI mismatch, so both sides of
+    /// the bound are pinned.
+    @Test func structuralCodeSitesBoundAtTheirTables() throws {
+        let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
+        let signal = { (slot: Int, word: Int) in PageLayout.signals + slot * PageLayout.signalStride + word * 8 }
+        let counter = { (slot: Int) in PageLayout.counters + slot * PageLayout.counterStride }
+        let sites: [(name: String, offset: Int, count: Int)] = [
+            ("platform", PageLayout.platform, PageLayout.platformCodes.count),
+            ("level", PageLayout.level, PageLayout.levelCodes.count),
+            ("signals[0].id", signal(0, 0), PageLayout.signalCodes.count),
+            ("signals[0].unit", signal(0, 1), PageLayout.unitCodes.count),
+            ("signals[0].sharedWith", signal(0, 19), PageLayout.signalCodes.count),
+            ("admitReasonSignal", PageLayout.admitReasonSignal, PageLayout.signalCodes.count),
+            ("killMode.mode", PageLayout.killModeMode, PageLayout.killModeCodes.count),
+            ("recommendation.basis", PageLayout.recommendationBasis, PageLayout.signalCodes.count),
+            ("counters[0].band", counter(0), PageLayout.bandCodes.count),
+            ("signals[1].id", signal(1, 0), PageLayout.signalCodes.count),
+            ("counters[1].band", counter(1), PageLayout.bandCodes.count),
+        ]
+        #expect(PageLayout.signalWordNames[1] == "unit")
+        #expect(PageLayout.signalWordNames[19] == "sharedWith")
+        #expect(PageLayout.counterWordNames[0] == "band")
+        for site in sites {
+            for (code, valid) in [(site.count, true), (site.count + 1, false)] {
+                let scratch = try ScratchPage(copying: "darwin.v1.page") { base in
+                    base.storeBytes(of: UInt64(code).littleEndian, toByteOffset: site.offset, as: UInt64.self)
+                }
+                let result = try BudgetPage.open(path: scratch.path).read(now: now)
+                if valid {
+                    #expect(throws: Never.self, "\(site.name): last valid code \(code) is rejected") {
+                        try result.get()
+                    }
+                } else {
+                    #expect(throws: BudgetError.abiMismatch, "\(site.name): code \(code) is not a mismatch") {
+                        try result.get()
+                    }
+                }
+            }
+        }
+    }
+
     @Test func notFoundCarriesErrno() {
         #expect(throws: BudgetError.notFound(errno: ENOENT)) {
             try BudgetPage.open(path: pageDir.appendingPathComponent("no-such.v1.page").path)
