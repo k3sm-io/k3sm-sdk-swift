@@ -51,6 +51,7 @@ do {
         if let room = snapshot.bytesUntil(signal: .memoryAvailable, rung: .admitStop) {
             print("bytes until admit-stop:", room)
         }
+        print("slots of 512 MiB:", snapshot.batchSlots(slotBytes: 512 * 1024 * 1024))
     case .failure(let error):
         print("no stable read:", error)
     }
@@ -58,6 +59,13 @@ do {
     print("cannot open the page:", error)
 }
 ```
+
+`bytesUntil(signal:rung:)` returns nil for a signal that is not measured in
+bytes, such as a permille or a count, and treats a negative value or threshold
+as 0. `batchSlots(slotBytes:)` returns an `Int64`: how many slots of that size
+fit in the recommendation's safe additional bytes. It returns 0 when the node
+does not admit, when the page carries no positive recommendation, or when the
+slot size is not positive.
 
 Follow changes. The writer bumps the page's `notifyEpoch` word only when the
 level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
@@ -68,7 +76,10 @@ read, then one read per change, from one thread of its own that ends when the
 stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
 staleness rule allows, and the next fresh read after that. `poll()` never blocks. `wait(timeout:)` blocks its thread, so never
-call it from Swift concurrency:
+call it from Swift concurrency. The `doorbellPath:` parameter of the
+`BudgetNotifier` init is optional: it is the path of the doorbell file the
+producer provides, which the notifier opens for kqueue, and the init throws
+`BudgetError.notFound` if it cannot:
 
 ```swift
 let notifier = try BudgetNotifier(try BudgetPage.open(path: BudgetPage.defaultPagePath))
