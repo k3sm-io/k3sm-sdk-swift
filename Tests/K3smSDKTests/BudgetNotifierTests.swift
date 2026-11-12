@@ -421,6 +421,56 @@ private final class WriterProcess {
         #expect(stale, "no stale read after the writer went silent: \(reads())")
     }
 
+    /// After a stale yield, a brief torn read whose one-period re-read is
+    /// stale again is not yielded as a second stale, and a fresh page that
+    /// follows is.
+    @Test func changesDoesNotRepeatAStaleYieldAfterATransientTornRead() async throws {
+        let w = try WritablePage(fresh: false)
+        w.store(PageLayout.writerPeriodSeconds, 1)
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        func reads() -> [Result<BudgetSnapshot, BudgetError>] { seen.value.withLock { $0 } }
+        func isStale(_ r: Result<BudgetSnapshot, BudgetError>) -> Bool {
+            if case .failure(.stale) = r { true } else { false }
+        }
+
+        var deadline = ContinuousClock.now + .seconds(5)
+        while reads().isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard let first = reads().first, isStale(first) else {
+            Issue.record("want a stale first read, got \(reads())")
+            return
+        }
+
+        // A write that starts and is abandoned, leaving the page stale: torn
+        // for 400 ms, well inside the one-second re-read, with no epoch bump.
+        let seq = w.load(PageLayout.seq)
+        w.store(PageLayout.seq, seq &+ 1)
+        try await Task.sleep(for: .milliseconds(400))
+        w.store(PageLayout.seq, seq)
+        // The re-read lands about one period after the torn read was seen.
+        try await Task.sleep(for: .milliseconds(1400))
+        let after = reads()
+        #expect(after.count == 1, "the stale error was yielded again, or the torn one was: \(after)")
+
+        // A fresh sample, still with no epoch bump, is yielded.
+        w.publish()
+        deadline = ContinuousClock.now + .seconds(3)
+        while reads().count < 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let all = reads()
+        guard all.count == 2, case .success = all[1] else {
+            Issue.record("want one fresh read after the stale one, got \(all)")
+            return
+        }
+    }
+
     /// A timeout too large to add to the clock waits with no deadline rather
     /// than returning at once.
     @Test func waitWithAMaximalTimeoutDoesNotReturnAtOnce() throws {

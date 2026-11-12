@@ -58,6 +58,9 @@ public final class BudgetNotifier: Sendable {
     /// broken. The cost is up to 10 wakeups a second per blocked waiter; a
     /// shorter slice sees a lost ring sooner and wakes more often.
     static let doorbellSlice: Duration = .milliseconds(100)
+    /// The longest one address wait is given; the loop re-checks the
+    /// deadline, so a kernel that times a huge timeout out at once cannot spin.
+    private static let maxWordWait: UInt64 = 24 * 60 * 60 * 1_000_000_000
     /// The number of `changes()` threads running, for the tests.
     static let liveFeeders = Atomic<Int>(0)
 
@@ -150,7 +153,9 @@ public final class BudgetNotifier: Sendable {
         // staleness check above resumes after the next snapshot.
         var lastFailure: BudgetError?
         func stopped() -> Bool { stop.value.load(ordering: .acquiring) }
-        func emit() -> Bool {
+        // Yields a read; a failure equal to `unless` (the last error
+        // yielded) is not yielded again.
+        func emit(unless: BudgetError? = nil) -> Bool {
             var r = page.read()
             if case .failure(let e) = r, e == .torn || e == .stale {
                 // One re-read, one writer period later.
@@ -161,6 +166,7 @@ public final class BudgetNotifier: Sendable {
                 }
                 r = page.read()
             }
+            if case .failure(let e) = r, e == unless { return true }
             note(r)
             if case .terminated = continuation.yield(r) { return false }
             return true
@@ -201,9 +207,9 @@ public final class BudgetNotifier: Sendable {
             } else if let last = lastFailure {
                 switch page.read() {
                 case .success:
-                    guard emit() else { return }
+                    guard emit(unless: last) else { return }
                 case .failure(let e) where e != last:
-                    guard emit() else { return }
+                    guard emit(unless: last) else { return }
                 case .failure:
                     break
                 }
@@ -254,7 +260,7 @@ public final class BudgetNotifier: Sendable {
                 }
                 continue
             }
-            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, remaining) {
+            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, min(remaining, maxWordWait)) {
             case 0, ETIMEDOUT, EINTR:
                 continue
             default:
