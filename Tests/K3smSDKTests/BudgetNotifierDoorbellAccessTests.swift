@@ -24,9 +24,9 @@ private let pageFixture = URL(fileURLWithPath: #filePath).deletingLastPathCompon
 
 /// A doorbell file the process may not open is refused, not ignored: the
 /// notifier throws `notFound` carrying the open's `EACCES`.
-@Test func unreadableDoorbellThrowsNotFoundWithEACCES() throws {
-    // Root opens a mode 000 file regardless, so there is nothing to refuse.
-    guard geteuid() != 0 else { return }
+/// Root opens a mode 000 file regardless, so there is nothing to refuse.
+@Test(.enabled(if: geteuid() != 0, "needs a non-root user"))
+func unreadableDoorbellThrowsNotFoundWithEACCES() throws {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("k3sm-sdk-bell-access-\(UUID().uuidString)").path
     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
