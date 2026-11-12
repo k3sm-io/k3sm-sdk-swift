@@ -93,7 +93,9 @@ for await read in notifier.changes() {
 A notifier starts from the epoch the page holds at `init`, so a change that
 lands after you read a snapshot and before you create the notifier would be
 taken as already seen. Seed it with the snapshot's `notifyEpoch` and the next
-`poll()` or `wait(timeout:)` reports that change. Seeding does not affect a
+`poll()` or `wait(timeout:)` reports that change. Unlike the C++ SDK's
+`seed`, which must be called before the first poll or wait on the waiting
+thread, this one is safe to call from any thread. Seeding does not affect a
 `changes()` stream, which tracks its own epoch:
 
 ```swift

@@ -209,6 +209,11 @@ private final class WriterProcess {
         let live = try BudgetNotifier(page)
         live.seed(page.loadNotifyEpoch())
         #expect(live.poll() == nil)
+
+        let waiter = try BudgetNotifier(page)
+        waiter.seed(snapshot.notifyEpoch)
+        #expect(waiter.wait(timeout: .milliseconds(200)) == snapshot.notifyEpoch &+ 1)
+        #expect(waiter.wait(timeout: .zero) == nil)
     }
 
     @Test func waitTimesOutWithoutAChange() throws {

@@ -95,7 +95,9 @@ public final class BudgetNotifier: Sendable {
     /// affected: it compares against the epoch it read when it started, and
     /// when it returns a change it overwrites the seeded epoch with that
     /// change. For a predictable result, seed before the first `poll()` or
-    /// `wait(timeout:)`.
+    /// `wait(timeout:)`. Unlike the C++ SDK's `seed`, which must be called
+    /// before the first poll or wait on the waiting thread, this one is safe
+    /// to call from any thread.
     public func seed(_ epoch: UInt64) {
         lastSeen.withLock { $0 = epoch }
     }
