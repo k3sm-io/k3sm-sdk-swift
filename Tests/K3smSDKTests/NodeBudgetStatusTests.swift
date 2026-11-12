@@ -418,3 +418,103 @@ func capacityCoreSplitAndGPU() throws {
     #expect(before.gpuCount == nil)
     #expect(before.memCapacityBytes == darwin.memCapacityBytes)
 }
+
+// MARK: - the apiVersion on both document kinds
+
+/// The darwin golden as an object, or a NodeBudgetList holding both goldens.
+private func versionDocument(list: Bool) throws -> [String: Any] {
+    if !list { return try jsonObject(golden("darwin.golden.json")) }
+    return [
+        "apiVersion": K3smSDKVersion.nodeBudgetAPIVersion, "kind": K3smSDKVersion.nodeBudgetListKind,
+        "items": try goldenNames.map { try jsonObject(golden($0)) },
+    ]
+}
+
+private struct VersionCase: Sendable, CustomStringConvertible {
+    let description: String
+    let list: Bool
+    /// The apiVersion to set, or nil to delete it.
+    let apiVersion: (any Sendable)?
+}
+
+private let versionCases: [VersionCase] = [false, true].flatMap { list in
+    let name = list ? "decodeList" : "decodeBudget"
+    return [
+        VersionCase(description: "no apiVersion passed to \(name)", list: list, apiVersion: nil),
+        VersionCase(description: "apiVersion v9 passed to \(name)", list: list, apiVersion: "v9"),
+        VersionCase(description: "a numeric apiVersion passed to \(name)", list: list, apiVersion: 7),
+    ]
+}
+
+@Test("a missing, different or non-string apiVersion gives unsupportedVersion", arguments: versionCases)
+private func wrongVersion(_ c: VersionCase) throws {
+    var root = try versionDocument(list: c.list)
+    root["apiVersion"] = c.apiVersion
+    let data = try jsonData(root)
+    let err = #expect(throws: NodeBudgetDecodeError.self) {
+        if c.list { _ = try NodeBudgetDecoder.decodeList(data) } else { _ = try NodeBudgetDecoder.decodeBudget(data) }
+    }
+    #expect(err == .unsupportedVersion)
+}
+
+// MARK: - null values and list errors
+
+/// The malformed error `body` throws, or nil after recording an issue.
+private func malformedError(
+    _ body: () throws -> Void
+) -> (path: String, reason: String)? {
+    let err = #expect(throws: NodeBudgetDecodeError.self) { try body() }
+    guard case let .malformed(path, reason)? = err else {
+        Issue.record("want a malformed error, got \(String(describing: err))")
+        return nil
+    }
+    return (path, reason)
+}
+
+@Test("a null where a value is required gives its path and a reason")
+func nullRequiredValue() throws {
+    let data = try darwinWithStatus { try editElement(&$0, "signals", 0) { $0["id"] = NSNull() } }
+    let got = malformedError { _ = try NodeBudgetDecoder.decodeBudget(data) }
+    #expect(got?.path == "status.signals[0].id")
+    #expect(got?.reason.isEmpty == false)
+}
+
+@Test("a list without items reports the items key")
+func listWithoutItems() throws {
+    var list = try versionDocument(list: true)
+    list.removeValue(forKey: "items")
+    let data = try jsonData(list)
+    let got = malformedError { _ = try NodeBudgetDecoder.decodeList(data) }
+    #expect(got?.path == "items")
+    #expect(got?.reason.isEmpty == false)
+}
+
+@Test("a bad value in a list item reports the item's index")
+func listItemPath() throws {
+    var list = try versionDocument(list: true)
+    try editElement(&list, "items", 1) { item in
+        var status = item["status"] as? [String: Any] ?? [:]
+        status["observedAt"] = "2026-13-19T12:00:00Z"
+        item["status"] = status
+    }
+    let data = try jsonData(list)
+    let got = malformedError { _ = try NodeBudgetDecoder.decodeList(data) }
+    let path = got?.path ?? ""
+    #expect(path.hasPrefix("items[1]."), "got path \(path)")
+}
+
+@Test("a list with no items decodes to an empty list")
+func emptyList() throws {
+    var list = try versionDocument(list: true)
+    list["items"] = [Any]()
+    let decoded = try NodeBudgetDecoder.decodeList(jsonData(list))
+    #expect(decoded.items.isEmpty)
+}
+
+@Test("a top-level array passed to decodeList is not an object")
+func listNotAnObject() throws {
+    let data = try jsonData([versionDocument(list: true)])
+    #expect(throws: NodeBudgetDecodeError.malformed(path: "", reason: "the document is not a JSON object")) {
+        try NodeBudgetDecoder.decodeList(data)
+    }
+}
