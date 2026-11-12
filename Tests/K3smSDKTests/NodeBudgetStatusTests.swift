@@ -518,3 +518,40 @@ func listNotAnObject() throws {
         try NodeBudgetDecoder.decodeList(data)
     }
 }
+
+// MARK: - error descriptions and nested unknown words
+
+@Test("each decode error describes itself in one line, with the fallbacks for an empty path and kind")
+func decodeErrorDescriptions() {
+    let cases: [(NodeBudgetDecodeError, String)] = [
+        (.malformed(path: "status.signals[0].id", reason: "expected a String"),
+         "malformed NodeBudget at status.signals[0].id: expected a String"),
+        (.malformed(path: "", reason: "missing required key"),
+         "malformed NodeBudget at <root>: missing required key"),
+        (.unsupportedVersion,
+         "unsupported NodeBudget apiVersion, want \(K3smSDKVersion.nodeBudgetAPIVersion)"),
+        (.unsupportedKind("Pod"), "unsupported NodeBudget document kind \"Pod\""),
+        (.unsupportedKind(""), "unsupported NodeBudget document kind <missing>"),
+        (.notJSON, "the NodeBudget document is not JSON"),
+    ]
+    for (error, want) in cases {
+        #expect("\(error)" == want)
+    }
+}
+
+@Test("an unknown word in a signal inside an array decodes, is not known, and round-trips")
+func unknownWordInArrayElement() throws {
+    let data = try darwinWithStatus { status in
+        try editElement(&status, "signals", 0) {
+            $0["id"] = "plasma.available"
+            $0["unit"] = "furlongs"
+        }
+    }
+    let budget = try NodeBudgetDecoder.decodeBudget(data)
+    let signal = try #require(budget.status?.signals?.first)
+    #expect(signal.id.rawValue == "plasma.available")
+    #expect(!signal.id.isKnown)
+    #expect(signal.unit.rawValue == "furlongs")
+    #expect(!signal.unit.isKnown)
+    #expect(try reencode(budget) == JSONValue.parse(data))
+}
