@@ -28,8 +28,10 @@ internal import CK3smPage
 /// on the shared read-only mapping, so a writer in another process wakes it.
 /// When the producer provides a doorbell file instead, pass its path and the
 /// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE`) in
-/// slices of at most 50 ms, checking the word between them, so a bump whose
-/// doorbell write failed is still seen within one slice.
+/// slices of at most 100 ms, checking the word between them, so a bump whose
+/// doorbell write failed is still seen within one slice. When the kqueue
+/// wait itself fails, the notifier stops using it and sleeps between checks
+/// of the word, in slices of the same length.
 /// No socket is used. A reader that wants every sample polls `read()`.
 ///
 /// The notifier remembers the last epoch it reported, starting from the
@@ -51,8 +53,11 @@ public final class BudgetNotifier: Sendable {
     /// stream was cancelled.
     static let feederSlice: Duration = .milliseconds(100)
     /// The longest a doorbell wait blocks before the epoch word is checked
-    /// again: the worst-case delay for a bump whose doorbell never rings.
-    static let doorbellSlice: Duration = .milliseconds(50)
+    /// again: the worst-case delay for a bump whose doorbell never rings, or
+    /// whose ring was lost, and the sleep between checks once the doorbell is
+    /// broken. The cost is up to 10 wakeups a second per blocked waiter; a
+    /// shorter slice sees a lost ring sooner and wakes more often.
+    static let doorbellSlice: Duration = .milliseconds(100)
     /// The number of `changes()` threads running, for the tests.
     static let liveFeeders = Atomic<Int>(0)
 
@@ -228,8 +233,14 @@ public final class BudgetNotifier: Sendable {
             if let doorbell {
                 // The doorbell is an extra wake source, never the only one:
                 // its write can fail or never happen, so the word is checked
-                // again at least every doorbellSlice.
-                doorbell.wait(nanoseconds: min(remaining, doorbellSlice.nanoseconds))
+                // again at least every doorbellSlice. A doorbell whose wait
+                // failed is not waited on again: the word is polled instead,
+                // so a failing kevent cannot spin.
+                let slice = min(remaining, doorbellSlice.nanoseconds)
+                if doorbell.isBroken || !doorbell.wait(nanoseconds: slice) {
+                    doorbell.markBroken()
+                    usleep(useconds_t(slice / 1000))
+                }
                 continue
             }
             switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, remaining) {
@@ -259,6 +270,7 @@ extension Atomic where Value == Bool {
 private final class Doorbell: Sendable {
     private let fd: Int32
     private let kq: Int32
+    private let broken = Atomic<Bool>(false)
 
     init(path: String) throws(BudgetError) {
         fd = path.withCString { open($0, O_EVTONLY | O_CLOEXEC) }
@@ -285,13 +297,22 @@ private final class Doorbell: Sendable {
         close(fd)
     }
 
+    /// Whether a wait on this doorbell has failed; it is not waited on again.
+    var isBroken: Bool { broken.load(ordering: .relaxed) }
+
+    /// Marks the doorbell as one that cannot be waited on.
+    func markBroken() { broken.store(true, ordering: .relaxed) }
+
     /// Blocks until the doorbell is written or the time runs out. A write
     /// between the caller's check and this call is kept by the kqueue, so
-    /// it is not lost.
-    func wait(nanoseconds: UInt64) {
+    /// it is not lost. Returns false when the wait failed (an error other
+    /// than EINTR, or an `EV_ERROR` event), so the doorbell cannot be used.
+    func wait(nanoseconds: UInt64) -> Bool {
         var ts = timespec(tv_sec: Int(nanoseconds / 1_000_000_000), tv_nsec: Int(nanoseconds % 1_000_000_000))
         var ev = kevent()
-        _ = kevent(kq, nil, 0, &ev, 1, &ts)
+        let rc = kevent(kq, nil, 0, &ev, 1, &ts)
+        if rc < 0 { return errno == EINTR }
+        return rc == 0 || ev.flags & UInt16(EV_ERROR) == 0
     }
 }
 

@@ -62,7 +62,7 @@ do {
 Follow changes. The writer bumps the page's `notifyEpoch` word only when the
 level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
 on that word across processes. With a doorbell file, the notifier also wakes
-on the doorbell, but still checks the word at least every 50 ms, so a missed
+on the doorbell, but still checks the word at least every 100 ms, so a missed
 doorbell write delays a change by at most that. `changes()` yields the current
 read, then one read per change, from one thread of its own that ends when the
 stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
