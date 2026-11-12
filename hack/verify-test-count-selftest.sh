@@ -98,4 +98,30 @@ Test Case '-[K3smSDKTests.PageTests testDecode]' passed (0.001 seconds).
 	 Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
 EOF
 
+# A test's own output that holds a summary inside a longer line is not a summary.
+expect count-in-output fail "FAIL: the filtered test run executed no test" <<'EOF'
+◇ Test run started.
+log: fixture says "✔ Test run with 5 tests in 1 suite passed after 0.001 seconds."
+note: 	 Executed 7 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
+✔ Test run with 0 tests passed after 0.001 seconds.
+EOF
+
+# The summary line exactly as this toolchain's Swift Testing prints it.
+expect swift-testing-zero-suites pass "ok: 1 tests ran" <<'EOF'
+✔ Test run with 1 test in 0 suites passed after 0.009 seconds.
+EOF
+
+expect required-failed-and-passed fail "FAIL: crossProcessWakeOnNotifyEpochOnly failed" \
+	--require crossProcessWakeOnNotifyEpochOnly <<'EOF'
+✘ Test crossProcessWakeOnNotifyEpochOnly() failed after 4.106 seconds with 1 issue.
+✔ Test crossProcessWakeOnNotifyEpochOnly() passed after 4.001 seconds.
+✘ Test run with 36 tests in 2 suites failed after 31.686 seconds with 1 issue.
+EOF
+
+expect xctest-required-failed fail "FAIL: testDecode failed" --require testDecode <<'EOF'
+Test Case '-[K3smSDKTests.PageTests testDecode]' failed (0.001 seconds).
+Test Case '-[K3smSDKTests.PageTests testDecode]' passed (0.001 seconds).
+	 Executed 2 tests, with 1 failure (0 unexpected) in 0.002 (0.002) seconds
+EOF
+
 echo "test-count self-test: $n cases ok"

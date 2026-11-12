@@ -32,7 +32,8 @@
 # nothing; each run's output goes through hack/lib/test-count.sh (after its
 # self-test, hack/verify-test-count-selftest.sh), which fails a run that
 # executed no test, and in stage 12 one whose process-spawning test was
-# skipped or did not run.
+# skipped or did not run. Stage 2, the full default run, calls an unfiltered
+# swift test and so does not go through the count helper.
 #
 # A stage name as the first argument runs that stage alone: --reader,
 # --sanitize, --version-check, --nodebudget, --notifier, and --stress,
