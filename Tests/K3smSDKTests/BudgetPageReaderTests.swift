@@ -903,6 +903,26 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(try read(observedAt: Int64.max, period: 1, now: Int64.min).get().observedAt == Int64.max)
     }
 
+    /// The largest period whose three-fold does not overflow, Int64.max / 3,
+    /// gives the bound 3 * (Int64.max / 3) == Int64.max - 1: an age equal to
+    /// the bound reads fresh and an age one greater is stale, as in the C++ SDK.
+    @Test func staleRuleAtLargestNonOverflowingPeriod() throws {
+        func read(period: Int64, now: Int64) throws -> Result<BudgetSnapshot, BudgetError> {
+            let scratch = try ScratchPage(copying: "darwin.v1.page") { base in
+                base.storeBytes(of: UInt64(0).littleEndian,
+                                toByteOffset: PageLayout.observedAt, as: UInt64.self)
+                base.storeBytes(of: UInt64(bitPattern: period).littleEndian,
+                                toByteOffset: PageLayout.writerPeriodSeconds, as: UInt64.self)
+            }
+            return try BudgetPage.open(path: scratch.path).read(now: now)
+        }
+        let period = Int64.max / PageLayout.staleFactor
+        let bound = PageLayout.staleFactor * period
+        #expect(bound == Int64.max - 1)
+        #expect(try read(period: period, now: bound).get().observedAt == 0)
+        #expect(throws: BudgetError.stale) { try read(period: period, now: bound + 1).get() }
+    }
+
     /// A file longer than a page maps only the first page and reads the same
     /// snapshot as the plain fixture. The mapped length is observed through
     /// the header check: a body size that ends past the first page but
