@@ -60,7 +60,10 @@ public final class BudgetNotifier: Sendable {
     static let doorbellSlice: Duration = .milliseconds(100)
     /// The longest one address wait is given; the loop re-checks the
     /// deadline, so a kernel that times a huge timeout out at once cannot spin.
-    private static let maxWordWait: UInt64 = 24 * 60 * 60 * 1_000_000_000
+    static let maxWordWait: UInt64 = 24 * 60 * 60 * 1_000_000_000
+    /// The longest sleep after a failed address wait before the word is
+    /// polled again, in nanoseconds.
+    static let failedWordWaitSleep: UInt64 = 10_000_000
     /// The number of `changes()` threads running, for the tests.
     static let liveFeeders = Atomic<Int>(0)
 
@@ -277,21 +280,39 @@ public final class BudgetNotifier: Sendable {
                 // again at least every doorbellSlice. A doorbell whose wait
                 // failed is not waited on again: the word is polled instead,
                 // so a failing kevent cannot spin.
-                let slice = min(remaining, doorbellSlice.nanoseconds)
+                let slice = doorbellWaitSlice(remaining: remaining)
                 if doorbell.isBroken || !doorbell.wait(nanoseconds: slice) {
                     doorbell.markBroken()
                     usleep(useconds_t(slice / 1000))
                 }
                 continue
             }
-            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, min(remaining, maxWordWait)) {
+            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, wordWaitSlice(remaining: remaining)) {
             case 0, ETIMEDOUT, EINTR:
                 continue
             default:
                 // The wait itself failed: fall back to polling the word.
-                usleep(useconds_t(min(remaining, 10_000_000) / 1000))
+                usleep(useconds_t(failedWaitSleep(remaining: remaining) / 1000))
             }
         }
+    }
+
+    /// The longest one doorbell wait blocks, in nanoseconds: `remaining`
+    /// clamped to `doorbellSlice`.
+    static func doorbellWaitSlice(remaining: UInt64) -> UInt64 {
+        min(remaining, doorbellSlice.nanoseconds)
+    }
+
+    /// The timeout one address wait on the epoch word is given, in
+    /// nanoseconds: `remaining` clamped to `maxWordWait`.
+    static func wordWaitSlice(remaining: UInt64) -> UInt64 {
+        min(remaining, maxWordWait)
+    }
+
+    /// The sleep after a failed address wait, in nanoseconds: `remaining`
+    /// clamped to `failedWordWaitSleep`.
+    static func failedWaitSleep(remaining: UInt64) -> UInt64 {
+        min(remaining, failedWordWaitSleep)
     }
 }
 
