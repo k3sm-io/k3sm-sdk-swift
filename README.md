@@ -18,7 +18,9 @@ client is not here yet.
 
 The SDK is a SwiftPM package with one library product, `K3smSDK`, for macOS 26
 and later. Pin it to the exact 40-character revision of a release tag, with the tag in a
-comment. Never use `from:`, an exact tag or a branch:
+comment. Never use `from:`, an exact tag or a branch. The revision and the
+`v1.0.0` tag below are placeholders: the package version is 0.0.0 and there is
+no release yet.
 
 ```swift
 dependencies: [
@@ -38,7 +40,11 @@ print(K3smSDKVersion.string)
 ```
 
 Read the node budget page. `BudgetPage.defaultPagePath` is the page's location
-for the platform the SDK is built for:
+for the platform the SDK is built for. `open` maps the page and checks its
+header, and throws `notFound` (with the errno), `truncated` or `abiMismatch`.
+`read()` reports `corrupt`, `torn` and `stale`, and can also report
+`abiMismatch` or `truncated` if a writer takes the page over. A page is stale
+when its observation is more than three writer periods old:
 
 ```swift
 import K3smSDK
@@ -71,7 +77,9 @@ Follow changes. The writer bumps the page's `notifyEpoch` word only when the
 level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
 on that word across processes. With a doorbell file, the notifier also wakes
 on the doorbell, but still checks the word at least every 100 ms, so a missed
-doorbell write delays a change by at most that. `changes()` yields the current
+doorbell write delays a change by at most that. One wait on the word is cut
+into slices of at most 24 hours, and after a failed kernel wait the notifier
+polls the word every 10 ms. `changes()` yields the current
 read, then one read per change, from one thread of its own that ends when the
 stream is cancelled. A writer that goes silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
