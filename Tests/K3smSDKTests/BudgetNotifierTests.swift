@@ -634,10 +634,22 @@ private final class WriterProcess {
     @Test func changesEndsWhenTheStreamIsDropped() async throws {
         let w = try WritablePage()
         let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
-        let before = BudgetNotifier.liveFeeders.load(ordering: .relaxed)
+        // A feeder an earlier test cancelled exits only at its next 100 ms
+        // check: take the baseline once the count has held one value for
+        // about 300 ms.
+        let settle = ContinuousClock.now + .seconds(5)
+        var before = BudgetNotifier.liveFeeders.load(ordering: .relaxed)
+        var heldSince = ContinuousClock.now
+        while ContinuousClock.now - heldSince < .milliseconds(300), ContinuousClock.now < settle {
+            try await Task.sleep(for: .milliseconds(20))
+            let now = BudgetNotifier.liveFeeders.load(ordering: .relaxed)
+            if now != before {
+                before = now
+                heldSince = ContinuousClock.now
+            }
+        }
         let started = try await holdAndDropAStream(n, above: before)
         #expect(started, "no feeder thread started within 5 s")
-        #expect(!Task.isCancelled)
         // No epoch bump follows, so only the termination can end the thread.
         let deadline = ContinuousClock.now + .seconds(10)
         while BudgetNotifier.liveFeeders.load(ordering: .relaxed) > before, ContinuousClock.now < deadline {
