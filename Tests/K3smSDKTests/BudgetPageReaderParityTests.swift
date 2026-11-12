@@ -118,6 +118,21 @@ private func put(_ base: UnsafeMutableRawPointer, _ offset: Int, _ value: UInt64
         }
     }
 
+    /// The platform and the admit-reason signal are structural codes too: one
+    /// past each table is an ABI mismatch, not an unknown value.
+    @Test func unknownPlatformAndAdmitReasonSignalAreAbiMismatch() throws {
+        let now = try fixtureObservedAt()
+        let cases: [(name: String, offset: Int, code: Int)] = [
+            ("platform", PageLayout.platform, PageLayout.platformCodes.count + 1),
+            ("admitReasonSignal", PageLayout.admitReasonSignal, PageLayout.signalCodes.count + 1),
+        ]
+        #expect(throws: Never.self) { try ParityPage().read(now: now).get() }
+        for c in cases {
+            let page = try ParityPage { put($0, c.offset, UInt64(c.code)) }
+            #expect(throws: BudgetError.abiMismatch, "\(c.name) = \(c.code)") { try page.read(now: now).get() }
+        }
+    }
+
     /// A producer-vocabulary code this reader does not know reads as the
     /// type's unknown value and the read succeeds.
     @Test func unknownVocabularyCodeReadsUnknown() throws {
