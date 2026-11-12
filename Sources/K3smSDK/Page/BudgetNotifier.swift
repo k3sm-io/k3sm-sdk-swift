@@ -261,8 +261,11 @@ public final class BudgetNotifier: Sendable {
     }
 
     /// Waits until the epoch differs from `from` or the timeout runs out.
-    private static func waitForChange(
-        _ page: BudgetPage, doorbell: Doorbell?, from: UInt64, timeout: Duration
+    /// `waitWord` is the address wait on the epoch word; tests pass one
+    /// that fails.
+    static func waitForChange(
+        _ page: BudgetPage, doorbell: Doorbell?, from: UInt64, timeout: Duration,
+        waitWord: (UnsafeRawPointer?, Int, UInt64, UInt64) -> Int32 = ck3sm_page_wait_word
     ) -> UInt64? {
         // A timeout past the end of the clock saturates: the wait has no
         // deadline.
@@ -287,7 +290,7 @@ public final class BudgetNotifier: Sendable {
                 }
                 continue
             }
-            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, wordWaitSlice(remaining: remaining)) {
+            switch waitWord(page.base, PageLayout.notifyEpoch, from, wordWaitSlice(remaining: remaining)) {
             case 0, ETIMEDOUT, EINTR:
                 continue
             default:
