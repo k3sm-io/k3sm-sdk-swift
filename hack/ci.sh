@@ -41,7 +41,10 @@
 # unknown-version file, an @full line for k3sm-sdk-swift, an unresolved --base
 # (default: the merge base with origin/main) or any non-doc change against it runs
 # the full gate. Only when the diff holds doc files alone (*.md, docs/, LICENSE,
-# NOTICE, DCO) is every swift test run skipped (stages 2 and 9, and the swift test
+# NOTICE, DCO) is every swift test run skipped. Markdown under Sources/ or Tests/,
+# or anything inside a .docc catalog, is not a doc: SwiftPM can read it as a
+# resource, fixture or documentation catalog, so it takes the full gate. The skip
+# covers stages 2 and 9, and the swift test
 # of stages 10 to 12); every other stage runs, the fixture checks of stages 10 and
 # 11 included. --dry-run resolves the mode, prints the plan and exits before any
 # stage runs. The mode flags go with the full run only, not with a stage name.
