@@ -79,6 +79,22 @@ for await read in notifier.changes() {
 }
 ```
 
+A notifier starts from the epoch the page holds at `init`, so a change that
+lands after you read a snapshot and before you create the notifier would be
+taken as already seen. Seed it with the snapshot's `notifyEpoch` and the next
+`poll()` or `wait(timeout:)` reports that change. Seeding does not affect a
+`changes()` stream, which tracks its own epoch:
+
+```swift
+let page = try BudgetPage.open(path: BudgetPage.defaultPagePath)
+let snapshot = try page.read().get()
+let notifier = try BudgetNotifier(page)
+notifier.seed(snapshot.notifyEpoch)
+if let epoch = notifier.poll() {
+    print("changed since the snapshot, now at epoch", epoch)
+}
+```
+
 ## Build and test
 
 ```sh
