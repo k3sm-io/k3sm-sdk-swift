@@ -65,7 +65,7 @@ private final class ParityPage {
             throw error
         }
         fd = open(path, O_RDWR)
-        guard fd >= 0, let m = mmap(nil, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0), m != MAP_FAILED else {
+        guard fd >= 0, let m = mmap(nil, PageLayout.pageSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0), m != MAP_FAILED else {
             if fd >= 0 { close(fd) }
             try? FileManager.default.removeItem(at: dir)
             throw POSIXError(.EIO)
@@ -75,7 +75,7 @@ private final class ParityPage {
     }
 
     deinit {
-        munmap(base, 4096)
+        munmap(base, PageLayout.pageSize)
         close(fd)
         try? FileManager.default.removeItem(at: dir)
     }
@@ -252,9 +252,9 @@ private func put(_ base: UnsafeMutableRawPointer, _ offset: Int, _ value: UInt64
         #expect(throws: BudgetError.notFound(errno: EISDIR)) { try BudgetPage.open(path: dirLink) }
     }
 
-    /// The open's own errno reaches the caller: EACCES for a file it may not
-    /// read, ENOTDIR for a path through a regular file.
-    @Test func openCarriesEaccesAndEnotdir() throws {
+    /// The open's own errno reaches the caller: ENOTDIR for a path through a
+    /// regular file.
+    @Test func openCarriesEnotdir() throws {
         let dir = try parityTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("budget.v1.page").path
@@ -263,11 +263,19 @@ private func put(_ base: UnsafeMutableRawPointer, _ offset: Int, _ value: UInt64
         #expect(throws: BudgetError.notFound(errno: ENOTDIR)) {
             try BudgetPage.open(path: file + "/budget.v1.page")
         }
+    }
 
-        if geteuid() != 0 {
-            try #require(chmod(file, 0) == 0, "chmod errno \(errno)")
-            defer { _ = chmod(file, 0o600) }
-            #expect(throws: BudgetError.notFound(errno: EACCES)) { try BudgetPage.open(path: file) }
-        }
+    /// The open's own errno reaches the caller: EACCES for a file it may not
+    /// read. Root reads anything, so the test is reported as skipped there.
+    @Test(.enabled(if: geteuid() != 0, "needs a non-root user"))
+    func openCarriesEacces() throws {
+        let dir = try parityTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("budget.v1.page").path
+        try FileManager.default.copyItem(atPath: parityFixture("darwin.v1.page"), toPath: file)
+
+        try #require(chmod(file, 0) == 0, "chmod errno \(errno)")
+        defer { _ = chmod(file, 0o600) }
+        #expect(throws: BudgetError.notFound(errno: EACCES)) { try BudgetPage.open(path: file) }
     }
 }
