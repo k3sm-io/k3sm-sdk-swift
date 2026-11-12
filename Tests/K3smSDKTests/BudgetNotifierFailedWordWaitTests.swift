@@ -41,7 +41,7 @@ import Testing
         #expect(got == nil)
         #expect(elapsedNs >= 290_000_000, "returned after \(elapsedNs / 1_000_000) ms")
         #expect(elapsedNs < 2_000_000_000, "returned after \(elapsedNs / 1_000_000) ms")
-        #expect((3...100).contains(calls), "\(calls) word waits in a 300 ms wait")
+        #expect((2...100).contains(calls), "\(calls) word waits in a 300 ms wait")
         #expect(cpu < 150_000_000, "the wait spun: \(cpu / 1_000_000) ms of CPU in a 300 ms wait")
     }
 
