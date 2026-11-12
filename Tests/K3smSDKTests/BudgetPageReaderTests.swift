@@ -672,6 +672,12 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         // swapfs.available has no evict-soft rung; imagefs.available has no rungs.
         #expect(s.bytesUntil(signal: .swapfsAvailable, rung: .evictSoft) == nil)
         #expect(s.bytesUntil(signal: .imagefsAvailable, rung: .warn) == nil)
+        // memory.swap rises toward warn; it has no evict-soft rung.
+        #expect(s.bytesUntil(signal: .memorySwap, rung: .warn) == Int64(256) << 20)
+        #expect(s.bytesUntil(signal: .memorySwap, rung: .evictSoft) == nil)
+        #expect(s.bytesUntil(signal: .swapfsAvailable, rung: .evictHard) == Int64(112) << 30)
+        // pid.available is a count, not bytes.
+        #expect(s.bytesUntil(signal: .pidAvailable, rung: .warn) == nil)
         // 3 GiB to spare.
         #expect(s.batchSlots(slotBytes: 1 << 30) == Int64(3))
         #expect(s.batchSlots(slotBytes: 2 << 30) == Int64(1))
@@ -704,5 +710,24 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         // The same record in bytes gives the distance to the rising rung.
         s.signals[i].unit = .bytes
         #expect(s.bytesUntil(signal: .memoryCompressor, rung: .warn) == Int64(290))
+    }
+
+    @Test func bytesUntilClampsNegativeInputsAsTheCppSDKDoes() throws {
+        var s = try readFixture("darwin.v1.page").get()
+        // The reader passes a negative byte value or threshold through.
+        let fall = try #require(s.signals.firstIndex { $0.id == .memoryAvailable })
+        let rise = try #require(s.signals.firstIndex { $0.id == .memorySwap })
+        #expect(s.signals[fall].unit == .bytes && s.signals[rise].unit == .bytes)
+        let cases: [(index: Int, signal: NodeBudget.SignalID, value: Int64, threshold: Int64, want: Int64)] = [
+            (fall, .memoryAvailable, -5, -10, 0),
+            (fall, .memoryAvailable, 5, -10, 5),
+            (rise, .memorySwap, -10, -5, 0),
+            (rise, .memorySwap, -10, 5, 5),
+        ]
+        for c in cases {
+            s.signals[c.index].value = c.value
+            s.signals[c.index].warnThreshold = c.threshold
+            #expect(s.bytesUntil(signal: c.signal, rung: .warn) == c.want, "\(c.signal) \(c.value) \(c.threshold)")
+        }
     }
 }
