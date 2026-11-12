@@ -297,6 +297,44 @@ private final class WriterProcess {
         #expect(after - before < descriptorCountSlack, "descriptors grew from \(before) to \(after)")
     }
 
+    /// A character device as the doorbell path is refused like any other
+    /// non-regular file (EINVAL), and the refusals leak no descriptor.
+    @Test func doorbellCharacterDeviceIsRefusedWithoutLeaking() throws {
+        let w = try WritablePage()
+        let page = try BudgetPage.open(path: w.path)
+        let perRound = 300
+        func round() {
+            for _ in 0..<perRound {
+                #expect(throws: BudgetError.notFound(errno: EINVAL)) {
+                    try BudgetNotifier(page, doorbellPath: "/dev/null")
+                }
+            }
+        }
+        round()
+        let before = openDescriptorCount()
+        round()
+        round()
+        let after = openDescriptorCount()
+        #expect(after - before < descriptorCountSlack, "descriptors grew from \(before) to \(after)")
+    }
+
+    /// A doorbell file unlinked and recreated after construction leaves the
+    /// notifier watching the old inode; a bump (and a ring of the new file)
+    /// is still seen through the periodic check of the epoch word.
+    @Test func doorbellReplacedAfterConstructionStillSeesTheChange() throws {
+        let w = try WritablePage()
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path), doorbellPath: w.doorbellPath)
+        try #require(unlink(w.doorbellPath) == 0, "unlink errno \(errno)")
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let waiter = Waiter { n.wait(timeout: .seconds(20)) }
+        waiter.ready.wait()
+        usleep(20_000)
+        w.bumpEpoch()
+        try w.ringDoorbell()
+        #expect(waiter.result(within: 15) == .some(1))
+    }
+
     /// changes() yields the current snapshot, then one per change, and its
     /// thread ends when the consumer cancels.
     @Test func changesYieldsSnapshotsAndEndsOnCancel() async throws {
