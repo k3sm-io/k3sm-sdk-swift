@@ -171,8 +171,9 @@ and notifier stages.
 Requirements: Swift 6.0 or later as the minimum compiler (the package declares
 `swift-tools-version:6.0` and builds in the Swift 6 language mode; the Xcode
 Command Line Tools are enough) on macOS 26 or later. The SDK depends on nothing
-outside the toolchain. The full gate, unlike the plain build, also needs
-`shellcheck` on your `PATH` and the toolchain's clang UBSan runtime.
+outside the toolchain. Unlike the plain build, every `hack/ci.sh` run also
+needs the toolchain's clang UBSan runtime, and the full gate needs `shellcheck`
+on your `PATH`.
 
 ## Contributing
 
