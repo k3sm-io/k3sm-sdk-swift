@@ -766,7 +766,7 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         defer { try? FileManager.default.removeItem(at: dir) }
 
         // A directory opens read-only, so the type check is what refuses it.
-        #expect(throws: BudgetError.notFound(errno: EFTYPE)) {
+        #expect(throws: BudgetError.notFound(errno: EISDIR)) {
             try BudgetPage.open(path: dir.path)
         }
 
@@ -791,6 +791,6 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
             return
         }
         let r = try #require(result.withLock { $0 })
-        #expect(throws: BudgetError.notFound(errno: EFTYPE)) { try r.get() }
+        #expect(throws: BudgetError.notFound(errno: EINVAL)) { try r.get() }
     }
 }

@@ -78,8 +78,10 @@ public final class BudgetPage: @unchecked Sendable {
     /// Maps the page at `path` read-only and checks its header.
     ///
     /// The open never blocks: a FIFO or other special file at the path
-    /// fails at once. Anything but a regular file is `notFound` with
-    /// `EFTYPE`.
+    /// fails at once. Anything but a regular file is `notFound`, with the
+    /// C++ SDK's errno values: `EISDIR` for a directory and `EINVAL` for
+    /// any other non-regular file. A symlink at the path is followed, and
+    /// its target is what is checked.
     public static func open(path: String) throws(BudgetError) -> BudgetPage {
         // O_NONBLOCK keeps a FIFO without a writer from blocking the open;
         // the type check below then refuses it.
@@ -88,7 +90,9 @@ public final class BudgetPage: @unchecked Sendable {
         defer { _ = close(fd) }
         var st = stat()
         guard fstat(fd, &st) == 0 else { throw .notFound(errno: errno) }
-        guard st.st_mode & S_IFMT == S_IFREG else { throw .notFound(errno: EFTYPE) }
+        guard st.st_mode & S_IFMT == S_IFREG else {
+            throw .notFound(errno: st.st_mode & S_IFMT == S_IFDIR ? EISDIR : EINVAL)
+        }
         let size = Int(st.st_size)
         guard size >= PageLayout.seq else { throw .truncated }
         let length = min(size, PageLayout.pageSize)
