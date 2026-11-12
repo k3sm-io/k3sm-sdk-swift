@@ -105,12 +105,13 @@ by at most that. Without a doorbell file, one wait on the word is cut into
 slices of at most 24 hours, and after a failed wait the notifier sleeps 10 ms
 and checks the word again. With a doorbell file, after a failed doorbell wait
 the notifier stops using the doorbell and checks the word every 100 ms. It
-never switches from one wake source to the other. `changes()` yields the
-current read, then one read per change, from one thread of its own that ends
-when the stream is cancelled. `changes()` opens its own doorbell from the same
-path, and if that open fails its thread waits on the word instead. The C++ SDK
-differs: there the word is the primary wake source and the doorbell the
-fallback, with an argument to prefer the doorbell. A read that is `torn` or `stale` is read again one writer
+never switches from waiting on the word to waiting on the doorbell, or the
+reverse. The C++ SDK differs: there the word is the primary wake source and
+the doorbell the fallback, with an argument to prefer the doorbell.
+`changes()` yields the current read, then one read per change, from one
+thread of its own that ends when the stream is cancelled. `changes()` opens
+its own doorbell from the same path, and if that open fails its thread waits
+on the word instead. A read that is `torn` or `stale` is read again one writer
 period later, and only that second result is yielded. A writer that goes
 silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
