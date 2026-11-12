@@ -138,10 +138,14 @@ public final class BudgetNotifier: Sendable {
 
     /// A stream of page reads: the current one first, then one after each
     /// `notifyEpoch` change. A read that is `torn` or `stale` is retried
-    /// once, one writer period later, and the stream yields that second
-    /// result, error or snapshot. A writer that goes silent bumps no epoch,
-    /// so the stream also yields the `stale` error once the last snapshot
-    /// passes the page's staleness rule, and the next fresh read after that.
+    /// once, one writer period later (one second until a snapshot has been
+    /// read), and the stream yields that second result, error or snapshot.
+    /// A writer that goes silent bumps no epoch, so once the last snapshot
+    /// passes the page's staleness rule the stream reads the page again. A
+    /// read that succeeds yields nothing, because the writer is alive. A read
+    /// that fails is retried once like any other and the second result is
+    /// yielded, normally the `stale` error. After an error the stream keeps
+    /// reading and yields the first fresh read, or a different error.
     /// One dedicated thread feeds the stream and
     /// ends when the stream is cancelled or dropped. Only the newest element
     /// is buffered for a slow consumer, so it always sees the latest state.
