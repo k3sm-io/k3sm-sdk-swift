@@ -27,6 +27,9 @@ limitations under the License.
 //   quit    exit
 //
 // The answer is "ok <seq> <notifyEpoch>" after the publish.
+//
+// Run as "PageTestWriter --offsets" it prints one "<field>=<offset>" line per
+// offset below and exits, so a test can hold them to the layout descriptor.
 
 import CK3smTestWake
 import Darwin
@@ -40,6 +43,14 @@ let levelOffset = 552
 func fail(_ message: String) -> Never {
     fputs("PageTestWriter: \(message)\n", stderr)
     exit(1)
+}
+
+if CommandLine.arguments.dropFirst().first == "--offsets" {
+    print("seq=\(seqOffset)")
+    print("notifyEpoch=\(notifyEpochOffset)")
+    print("observedAt=\(observedAtOffset)")
+    print("level=\(levelOffset)")
+    exit(0)
 }
 
 guard CommandLine.arguments.count == 2 else { fail("usage: PageTestWriter <page>") }
