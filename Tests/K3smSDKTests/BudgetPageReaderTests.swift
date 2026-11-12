@@ -889,4 +889,41 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         let long = try write("long.v1.page", bodySize: pastPage)
         #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: long) }
     }
+
+    /// A failed open closes its descriptor: a file too short for the header
+    /// and a file with a bad magic, a few hundred times each, leave the
+    /// process's descriptor count where it was. Other suites run beside this
+    /// one and open descriptors of their own, so the count is taken after a
+    /// warm-up round and again after the measured rounds, and the check
+    /// allows a slack far below one descriptor per failed open: a leak on
+    /// either path grows the count by hundreds, the neighbours by a few.
+    @Test func failedOpensLeakNoDescriptor() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-fd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let short = dir.appendingPathComponent("short.v1.page")
+        try Data(count: PageLayout.seq - 1).write(to: short)
+        let badMagic = dir.appendingPathComponent("magic.v1.page")
+        try Data(count: PageLayout.pageSize).write(to: badMagic)
+
+        let perRound = 300
+        func round() {
+            for _ in 0..<perRound {
+                #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: short.path) }
+                #expect(throws: BudgetError.abiMismatch) { try BudgetPage.open(path: badMagic.path) }
+            }
+        }
+        round()
+        let before = openDescriptorCount()
+        round()
+        round()
+        let after = openDescriptorCount()
+        #expect(after - before < 64, "descriptors grew from \(before) to \(after)")
+    }
+}
+
+/// The number of open descriptors in this process, probed with F_GETFD.
+private func openDescriptorCount() -> Int {
+    (0..<Int32(min(getdtablesize(), 1 << 16))).reduce(0) { $0 + (fcntl($1, F_GETFD) >= 0 ? 1 : 0) }
 }
