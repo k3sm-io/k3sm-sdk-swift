@@ -27,7 +27,8 @@ internal import CK3smPage
 /// `os_sync_wait_on_address_with_timeout` and `OS_SYNC_WAIT_ON_ADDRESS_SHARED`
 /// on the shared read-only mapping, so a writer in another process wakes it.
 /// When the producer provides a doorbell file instead, pass its path and the
-/// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE`) in
+/// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE` and
+/// `NOTE_EXTEND`) in
 /// slices of at most 100 ms, checking the word between them, so a bump whose
 /// doorbell write failed is still seen within one slice. When the kqueue
 /// wait itself fails, the notifier stops using it and sleeps between checks

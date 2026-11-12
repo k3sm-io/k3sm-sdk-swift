@@ -33,7 +33,7 @@ public enum BudgetError: Error, Equatable, Sendable, CustomStringConvertible {
     case corrupt
     /// No stable read: the writer kept the page busy for every attempt.
     case torn
-    /// The page has not been published for more than three writer periods.
+    /// The page's observation is more than three writer periods old.
     case stale
 
     /// The contract name of the error, as the apis page manifest spells it.
