@@ -66,7 +66,10 @@ public final class BudgetNotifier: Sendable {
 
     /// A notifier for `page`. With `doorbellPath`, the doorbell file the
     /// producer provides is opened for kqueue; failing that throws
-    /// `notFound` with the errno.
+    /// `notFound` with the errno. The open never blocks, and anything but a
+    /// regular file is `notFound` with the values `BudgetPage.open(path:)`
+    /// uses: `EISDIR` for a directory and `EINVAL` for any other
+    /// non-regular file, such as a FIFO.
     public init(_ page: BudgetPage, doorbellPath: String? = nil) throws(BudgetError) {
         self.page = page
         self.doorbellPath = doorbellPath
@@ -311,8 +314,20 @@ private final class Doorbell: Sendable {
     private let broken = Atomic<Bool>(false)
 
     init(path: String) throws(BudgetError) {
-        fd = path.withCString { open($0, O_EVTONLY | O_CLOEXEC) }
+        // O_NONBLOCK keeps a FIFO without a writer from blocking the open;
+        // the type check below then refuses it.
+        fd = path.withCString { open($0, O_EVTONLY | O_NONBLOCK | O_CLOEXEC) }
         guard fd >= 0 else { throw .notFound(errno: errno) }
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            let err = errno
+            close(fd)
+            throw .notFound(errno: err)
+        }
+        guard st.st_mode & S_IFMT == S_IFREG else {
+            close(fd)
+            throw .notFound(errno: st.st_mode & S_IFMT == S_IFDIR ? EISDIR : EINVAL)
+        }
         kq = kqueue()
         guard kq >= 0 else {
             let err = errno
