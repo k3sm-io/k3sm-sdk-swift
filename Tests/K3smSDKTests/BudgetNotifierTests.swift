@@ -930,6 +930,65 @@ private final class WriterProcess {
         w.wake()
         #expect(waiter.result(within: 1.5) == .some(1))
     }
+
+    /// A write to the doorbell file ends the doorbell's own kevent wait long
+    /// before its ceiling, with no page word anywhere in the picture. The
+    /// wait returns true for both an event and a timeout, so the wake is
+    /// told apart by time: it returns after the write and well before the
+    /// five-second ceiling, which only the kqueue registration can do.
+    @Test func doorbellWaitWakesOnAWriteLongBeforeItsCeiling() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-bell-wake-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/budget.bell"
+        #expect(FileManager.default.createFile(atPath: path, contents: Data([0])))
+        let bell = try Doorbell(path: path)
+
+        let ringAt = RingTime()
+        let ringer = Thread {
+            usleep(200_000)
+            let fd = open(path, O_WRONLY)
+            guard fd >= 0 else { return }
+            defer { close(fd) }
+            var b: UInt8 = 1
+            ringAt.at.store(clock_gettime_nsec_np(CLOCK_UPTIME_RAW), ordering: .releasing)
+            _ = pwrite(fd, &b, 1, 0)
+        }
+        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        ringer.start()
+        let ok = bell.wait(nanoseconds: 5_000_000_000)
+        let end = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        let rang = ringAt.at.load(ordering: .acquiring)
+
+        #expect(ok)
+        #expect(rang != 0, "the wait returned before the doorbell was written")
+        #expect(rang <= end)
+        #expect(end - start < 2_000_000_000, "the wait ran \((end - start) / 1_000_000) ms of its 5000 ms ceiling")
+    }
+
+    /// The control: with no write, the doorbell wait runs to its ceiling and
+    /// reports the timeout as true, as an event would be.
+    @Test func doorbellWaitWithoutAWriteRunsToItsCeiling() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3sm-sdk-bell-quiet-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/budget.bell"
+        #expect(FileManager.default.createFile(atPath: path, contents: Data([0])))
+        let bell = try Doorbell(path: path)
+
+        var ok = false
+        let d = elapsed { ok = bell.wait(nanoseconds: 300_000_000) }
+        #expect(ok)
+        #expect(d >= .milliseconds(290))
+        #expect(d < .seconds(2))
+    }
+}
+
+/// When the ringer thread wrote the doorbell, on the uptime clock; 0 until then.
+private final class RingTime: Sendable {
+    let at = Atomic<UInt64>(0)
 }
 
 /// The calling thread's CPU time in nanoseconds.
