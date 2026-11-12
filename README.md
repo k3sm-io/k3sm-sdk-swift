@@ -97,14 +97,20 @@ do {
 ```
 
 Follow changes. The writer bumps the page's `notifyEpoch` word only when the
-level, admit, a threshold or the generation changes, and `BudgetNotifier` wakes
-on that word across processes. With a doorbell file, the notifier also wakes
-on the doorbell, but still checks the word at least every 100 ms, so a missed
-doorbell write delays a change by at most that. One wait on the word is cut
-into slices of at most 24 hours, and after a failed kernel wait the notifier
-polls the word every 10 ms. `changes()` yields the current
-read, then one read per change, from one thread of its own that ends when the
-stream is cancelled. A read that is `torn` or `stale` is read again one writer
+level, admit, a threshold or the generation changes. `BudgetNotifier` wakes on
+that word across processes when no doorbell file is given. With a doorbell
+file, the notifier waits on the doorbell only, in slices of at most 100 ms,
+and reads the word between slices, so a missed doorbell write delays a change
+by at most that. Without a doorbell file, one wait on the word is cut into
+slices of at most 24 hours, and after a failed wait the notifier sleeps 10 ms
+and checks the word again. With a doorbell file, after a failed doorbell wait
+the notifier stops using the doorbell and checks the word every 100 ms. It
+never switches from one wake source to the other. `changes()` yields the
+current read, then one read per change, from one thread of its own that ends
+when the stream is cancelled. `changes()` opens its own doorbell from the same
+path, and if that open fails its thread waits on the word instead. The C++ SDK
+differs: there the word is the primary wake source and the doorbell the
+fallback, with an argument to prefer the doorbell. A read that is `torn` or `stale` is read again one writer
 period later, and only that second result is yielded. A writer that goes
 silent bumps no epoch, so `changes()`
 also yields the `stale` error once the last snapshot is older than the page's
