@@ -27,7 +27,11 @@ internal import CK3smPage
 /// `os_sync_wait_on_address_with_timeout` and `OS_SYNC_WAIT_ON_ADDRESS_SHARED`
 /// on the shared read-only mapping, so a writer in another process wakes it.
 /// When the producer provides a doorbell file instead, pass its path and the
-/// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE`).
+/// notifier waits on that file with kqueue (`EVFILT_VNODE`, `NOTE_WRITE`) in
+/// slices of at most 100 ms, checking the word between them, so a bump whose
+/// doorbell write failed is still seen within one slice. When the kqueue
+/// wait itself fails, the notifier stops using it and sleeps between checks
+/// of the word, in slices of the same length.
 /// No socket is used. A reader that wants every sample polls `read()`.
 ///
 /// The notifier remembers the last epoch it reported, starting from the
@@ -48,6 +52,15 @@ public final class BudgetNotifier: Sendable {
     /// How long the `changes()` thread waits before it checks whether its
     /// stream was cancelled.
     static let feederSlice: Duration = .milliseconds(100)
+    /// The longest a doorbell wait blocks before the epoch word is checked
+    /// again: the worst-case delay for a bump whose doorbell never rings, or
+    /// whose ring was lost, and the sleep between checks once the doorbell is
+    /// broken. The cost is up to 10 wakeups a second per blocked waiter; a
+    /// shorter slice sees a lost ring sooner and wakes more often.
+    static let doorbellSlice: Duration = .milliseconds(100)
+    /// The longest one address wait is given; the loop re-checks the
+    /// deadline, so a kernel that times a huge timeout out at once cannot spin.
+    private static let maxWordWait: UInt64 = 24 * 60 * 60 * 1_000_000_000
     /// The number of `changes()` threads running, for the tests.
     static let liveFeeders = Atomic<Int>(0)
 
@@ -98,7 +111,10 @@ public final class BudgetNotifier: Sendable {
     /// A stream of page reads: the current one first, then one after each
     /// `notifyEpoch` change. A read that is `torn` or `stale` is retried
     /// once, one writer period later, and the stream yields that second
-    /// result, error or snapshot. One dedicated thread feeds the stream and
+    /// result, error or snapshot. A writer that goes silent bumps no epoch,
+    /// so the stream also yields the `stale` error once the last snapshot
+    /// passes the page's staleness rule, and the next fresh read after that.
+    /// One dedicated thread feeds the stream and
     /// ends when the stream is cancelled or dropped. Only the newest element
     /// is buffered for a slow consumer, so it always sees the latest state.
     /// When the doorbell cannot be reopened for the thread, it waits on the
@@ -127,8 +143,19 @@ public final class BudgetNotifier: Sendable {
         into continuation: AsyncStream<Result<BudgetSnapshot, BudgetError>>.Continuation
     ) {
         var period: Int64 = 1
+        // When the last yield was a snapshot: the wall-clock second after
+        // which the page's staleness rule can call it stale. A hint for when
+        // to look again; read() decides.
+        var freshUntil: Int64?
+        // When the last yield was an error: that error. While it is set the
+        // page is read again every slice, so a recovery, or a change to
+        // another error, is yielded even with no epoch bump, and the
+        // staleness check above resumes after the next snapshot.
+        var lastFailure: BudgetError?
         func stopped() -> Bool { stop.value.load(ordering: .acquiring) }
-        func emit() -> Bool {
+        // Yields a read; a failure equal to `unless` (the last error
+        // yielded) is not yielded again.
+        func emit(unless: BudgetError? = nil) -> Bool {
             var r = page.read()
             if case .failure(let e) = r, e == .torn || e == .stale {
                 // One re-read, one writer period later.
@@ -139,25 +166,81 @@ public final class BudgetNotifier: Sendable {
                 }
                 r = page.read()
             }
-            if case .success(let s) = r { period = s.writerPeriodSeconds }
+            if case .failure(let e) = r, e == unless { return true }
+            note(r)
             if case .terminated = continuation.yield(r) { return false }
             return true
+        }
+        func note(_ r: Result<BudgetSnapshot, BudgetError>) {
+            switch r {
+            case .success(let s):
+                period = s.writerPeriodSeconds
+                freshUntil = staleAfter(s)
+                lastFailure = nil
+            case .failure(let e):
+                freshUntil = nil
+                lastFailure = e
+            }
         }
 
         var epoch = page.loadNotifyEpoch()
         guard emit() else { return }
         while !stopped() {
-            guard let e = waitForChange(page, doorbell: doorbell, from: epoch, timeout: feederSlice) else { continue }
-            epoch = e
-            guard emit() else { return }
+            if let e = waitForChange(page, doorbell: doorbell, from: epoch, timeout: feederSlice) {
+                epoch = e
+                guard emit() else { return }
+                continue
+            }
+            // No epoch change. A writer that went silent never bumps the
+            // epoch, so the page's staleness rule is checked here: a
+            // snapshot past its fresh window is read again and, when stale,
+            // yielded as such; after an error yield (stale, torn, corrupt or
+            // any other), the first fresh read, or a different error, is
+            // yielded.
+            if let until = freshUntil, wallSeconds() > until {
+                switch page.read() {
+                case .success(let s):
+                    note(.success(s)) // the writer is alive: nothing to yield
+                case .failure:
+                    guard emit() else { return }
+                }
+            } else if let last = lastFailure {
+                switch page.read() {
+                case .success:
+                    guard emit(unless: last) else { return }
+                case .failure(let e) where e != last:
+                    guard emit(unless: last) else { return }
+                case .failure:
+                    break
+                }
+            }
         }
+    }
+
+    /// The last wall-clock second at which `s` is not stale by the page's
+    /// rule (age above `staleFactor` writer periods), saturating.
+    private static func staleAfter(_ s: BudgetSnapshot) -> Int64 {
+        let (limit, o1) = PageLayout.staleFactor.multipliedReportingOverflow(by: s.writerPeriodSeconds)
+        if o1 { return .max }
+        let (until, o2) = s.observedAt.addingReportingOverflow(limit)
+        return o2 ? (limit > 0 ? .max : .min) : until
+    }
+
+    /// The wall clock in Unix seconds, the clock read() checks staleness on.
+    private static func wallSeconds() -> Int64 {
+        var ts = timespec()
+        clock_gettime(CLOCK_REALTIME, &ts)
+        return Int64(ts.tv_sec)
     }
 
     /// Waits until the epoch differs from `from` or the timeout runs out.
     private static func waitForChange(
         _ page: BudgetPage, doorbell: Doorbell?, from: UInt64, timeout: Duration
     ) -> UInt64? {
-        let deadline = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &+ timeout.nanoseconds
+        // A timeout past the end of the clock saturates: the wait has no
+        // deadline.
+        let (end, overflow) = clock_gettime_nsec_np(CLOCK_UPTIME_RAW).addingReportingOverflow(timeout.nanoseconds)
+        let deadline = overflow ? UInt64.max : end
         while true {
             let e = page.loadNotifyEpoch()
             if e != from { return e }
@@ -165,10 +248,19 @@ public final class BudgetNotifier: Sendable {
             guard now < deadline else { return nil }
             let remaining = deadline - now
             if let doorbell {
-                doorbell.wait(nanoseconds: remaining)
+                // The doorbell is an extra wake source, never the only one:
+                // its write can fail or never happen, so the word is checked
+                // again at least every doorbellSlice. A doorbell whose wait
+                // failed is not waited on again: the word is polled instead,
+                // so a failing kevent cannot spin.
+                let slice = min(remaining, doorbellSlice.nanoseconds)
+                if doorbell.isBroken || !doorbell.wait(nanoseconds: slice) {
+                    doorbell.markBroken()
+                    usleep(useconds_t(slice / 1000))
+                }
                 continue
             }
-            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, remaining) {
+            switch ck3sm_page_wait_word(page.base, PageLayout.notifyEpoch, from, min(remaining, maxWordWait)) {
             case 0, ETIMEDOUT, EINTR:
                 continue
             default:
@@ -195,6 +287,7 @@ extension Atomic where Value == Bool {
 private final class Doorbell: Sendable {
     private let fd: Int32
     private let kq: Int32
+    private let broken = Atomic<Bool>(false)
 
     init(path: String) throws(BudgetError) {
         fd = path.withCString { open($0, O_EVTONLY | O_CLOEXEC) }
@@ -221,13 +314,22 @@ private final class Doorbell: Sendable {
         close(fd)
     }
 
+    /// Whether a wait on this doorbell has failed; it is not waited on again.
+    var isBroken: Bool { broken.load(ordering: .relaxed) }
+
+    /// Marks the doorbell as one that cannot be waited on.
+    func markBroken() { broken.store(true, ordering: .relaxed) }
+
     /// Blocks until the doorbell is written or the time runs out. A write
     /// between the caller's check and this call is kept by the kqueue, so
-    /// it is not lost.
-    func wait(nanoseconds: UInt64) {
+    /// it is not lost. Returns false when the wait failed (an error other
+    /// than EINTR, or an `EV_ERROR` event), so the doorbell cannot be used.
+    func wait(nanoseconds: UInt64) -> Bool {
         var ts = timespec(tv_sec: Int(nanoseconds / 1_000_000_000), tv_nsec: Int(nanoseconds % 1_000_000_000))
         var ev = kevent()
-        _ = kevent(kq, nil, 0, &ev, 1, &ts)
+        let rc = kevent(kq, nil, 0, &ev, 1, &ts)
+        if rc < 0 { return errno == EINTR }
+        return rc == 0 || ev.flags & UInt16(EV_ERROR) == 0
     }
 }
 

@@ -114,6 +114,11 @@ private final class Waiter<T: Sendable>: @unchecked Sendable {
     }
 }
 
+/// The reads a `changes()` consumer collected.
+private final class Reads: Sendable {
+    let value = Mutex<[Result<BudgetSnapshot, BudgetError>]>([])
+}
+
 private func elapsed(_ body: () -> Void) -> Duration {
     ContinuousClock().measure(body)
 }
@@ -167,7 +172,10 @@ private final class WriterProcess {
     }
 }
 
-@Suite struct BudgetNotifierTests {
+/// Serialized: changesYieldsSnapshotsAndEndsOnCancel counts the live
+/// `changes()` threads process-wide, so another test's feeder running beside
+/// it would read as a thread that never ended.
+@Suite(.serialized) struct BudgetNotifierTests {
     @Test func pollReportsOnlyNotifyEpochChanges() throws {
         let w = try WritablePage()
         let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
@@ -227,6 +235,20 @@ private final class WriterProcess {
         #expect(waiter.result(within: 5) == .some(1))
     }
 
+    /// With a doorbell, a bump whose doorbell write never happened (and
+    /// with no address wake either) is still seen, from the epoch word,
+    /// well before the timeout.
+    @Test func waitWakesOnEpochBumpWhenDoorbellNeverRings() throws {
+        let w = try WritablePage()
+        #expect(FileManager.default.createFile(atPath: w.doorbellPath, contents: Data([0])))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path), doorbellPath: w.doorbellPath)
+        let waiter = Waiter { n.wait(timeout: .seconds(4)) }
+        waiter.ready.wait()
+        usleep(20_000)
+        w.bumpEpoch()
+        #expect(waiter.result(within: 1.5) == .some(1))
+    }
+
     @Test func missingDoorbellIsNotFound() throws {
         let w = try WritablePage()
         let page = try BudgetPage.open(path: w.path)
@@ -280,6 +302,189 @@ private final class WriterProcess {
             Issue.record("want stale, got \(String(describing: first))")
             return
         }
+    }
+
+    /// A writer that goes silent with no epoch bump still turns into a
+    /// yielded `stale` once the page's own staleness rule (three writer
+    /// periods since observedAt) says so.
+    @Test func changesYieldsStaleWhenWriterGoesSilent() async throws {
+        let w = try WritablePage()
+        // One second old with a one-second period: fresh now, even after a
+        // slow first read on a loaded machine, stale within about three
+        // seconds, then one re-read a period later.
+        w.store(PageLayout.writerPeriodSeconds, 1)
+        w.store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970) - 1))
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        let deadline = ContinuousClock.now + .seconds(6)
+        func gotStale() -> Bool {
+            seen.value.withLock { $0.contains { if case .failure(.stale) = $0 { true } else { false } } }
+        }
+        while !gotStale(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let all = seen.value.withLock { $0 }
+        guard case .success = all.first else {
+            Issue.record("want a fresh first read, got \(String(describing: all.first))")
+            return
+        }
+        #expect(gotStale(), "no stale read yielded after the writer went silent: \(all)")
+    }
+
+    /// A writer that keeps refreshing observedAt with no epoch bump is alive:
+    /// nothing is yielded past the stale window. When it then goes silent the
+    /// stale error is yielded, and when it resumes the fresh read is.
+    @Test func changesStaysQuietForALiveWriterWithAnUnchangedEpoch() async throws {
+        let w = try WritablePage()
+        w.store(PageLayout.writerPeriodSeconds, 1)
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        func reads() -> [Result<BudgetSnapshot, BudgetError>] { seen.value.withLock { $0 } }
+        func isStale(_ r: Result<BudgetSnapshot, BudgetError>) -> Bool {
+            if case .failure(.stale) = r { true } else { false }
+        }
+
+        // Alive: refreshed every 200 ms for longer than the three-second
+        // stale window.
+        let alive = ContinuousClock.now + .milliseconds(4500)
+        while ContinuousClock.now < alive {
+            w.publish()
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        let quiet = reads()
+        #expect(quiet.count == 1, "a live writer produced yields: \(quiet)")
+        guard case .success = quiet.first else {
+            Issue.record("want a fresh first read, got \(String(describing: quiet.first))")
+            return
+        }
+
+        // Silent: the stale error arrives.
+        var deadline = ContinuousClock.now + .seconds(8)
+        while !reads().contains(where: isStale), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(reads().contains(where: isStale), "no stale read after the writer went silent: \(reads())")
+
+        // Resumed, still with no epoch bump: a fresh read follows the stale one.
+        w.publish()
+        func recovered() -> Bool {
+            let all = reads()
+            guard let i = all.lastIndex(where: isStale) else { return false }
+            return all[(i + 1)...].contains { if case .success = $0 { true } else { false } }
+        }
+        deadline = ContinuousClock.now + .seconds(3)
+        while !recovered(), ContinuousClock.now < deadline {
+            w.publish()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(recovered(), "no fresh read after the writer resumed: \(reads())")
+    }
+
+    /// After a torn yield, a writer that recovers with no epoch bump is
+    /// yielded, and when it then goes silent the stale error is.
+    @Test func changesRecoversFromATornReadAndThenReportsStale() async throws {
+        let w = try WritablePage()
+        w.store(PageLayout.writerPeriodSeconds, 1)
+        w.store(PageLayout.seq, 1) // a write that never finishes: every read is torn
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        func reads() -> [Result<BudgetSnapshot, BudgetError>] { seen.value.withLock { $0 } }
+        func wait(for want: (Result<BudgetSnapshot, BudgetError>) -> Bool, seconds: Int64) async throws -> Bool {
+            let deadline = ContinuousClock.now + .seconds(seconds)
+            while !reads().contains(where: want), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            return reads().contains(where: want)
+        }
+
+        let torn = try await wait(for: { if case .failure(.torn) = $0 { true } else { false } }, seconds: 5)
+        #expect(torn, "want a torn read, got \(reads())")
+        // The write finishes, with no epoch bump.
+        w.store(PageLayout.observedAt, UInt64(bitPattern: Int64(Date().timeIntervalSince1970)))
+        w.store(PageLayout.seq, 2)
+        let fresh = try await wait(for: { if case .success = $0 { true } else { false } }, seconds: 3)
+        #expect(fresh, "no fresh read after the torn write finished: \(reads())")
+        // The writer then goes silent.
+        let stale = try await wait(for: { if case .failure(.stale) = $0 { true } else { false } }, seconds: 8)
+        #expect(stale, "no stale read after the writer went silent: \(reads())")
+    }
+
+    /// After a stale yield, a brief torn read whose one-period re-read is
+    /// stale again is not yielded as a second stale, and a fresh page that
+    /// follows is.
+    @Test func changesDoesNotRepeatAStaleYieldAfterATransientTornRead() async throws {
+        let w = try WritablePage(fresh: false)
+        w.store(PageLayout.writerPeriodSeconds, 1)
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let seen = Reads()
+        let task = Task {
+            for await r in n.changes() { seen.value.withLock { $0.append(r) } }
+        }
+        defer { task.cancel() }
+        func reads() -> [Result<BudgetSnapshot, BudgetError>] { seen.value.withLock { $0 } }
+        func isStale(_ r: Result<BudgetSnapshot, BudgetError>) -> Bool {
+            if case .failure(.stale) = r { true } else { false }
+        }
+
+        var deadline = ContinuousClock.now + .seconds(5)
+        while reads().isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard let first = reads().first, isStale(first) else {
+            Issue.record("want a stale first read, got \(reads())")
+            return
+        }
+
+        // A write that starts and is abandoned, leaving the page stale: torn
+        // for 400 ms, well inside the one-second re-read, with no epoch bump.
+        let seq = w.load(PageLayout.seq)
+        w.store(PageLayout.seq, seq &+ 1)
+        try await Task.sleep(for: .milliseconds(400))
+        w.store(PageLayout.seq, seq)
+        // The re-read lands about one period after the torn read was seen.
+        try await Task.sleep(for: .milliseconds(1400))
+        let after = reads()
+        #expect(after.count == 1, "the stale error was yielded again, or the torn one was: \(after)")
+
+        // A fresh sample, still with no epoch bump, is yielded.
+        w.publish()
+        deadline = ContinuousClock.now + .seconds(3)
+        while reads().count < 2, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let all = reads()
+        guard all.count == 2, case .success = all[1] else {
+            Issue.record("want one fresh read after the stale one, got \(all)")
+            return
+        }
+    }
+
+    /// A timeout too large to add to the clock waits with no deadline rather
+    /// than returning at once.
+    @Test func waitWithAMaximalTimeoutDoesNotReturnAtOnce() throws {
+        let w = try WritablePage()
+        let n = try BudgetNotifier(try BudgetPage.open(path: w.path))
+        let waiter = Waiter { n.wait(timeout: .seconds(Int64.max)) }
+        waiter.ready.wait()
+        usleep(50_000)
+        let early = waiter.result(within: 0)
+        #expect(early == nil, "returned at once: \(String(describing: early))")
+        w.bumpEpoch()
+        w.wake()
+        // A lost wake fails here within a few seconds instead of hanging.
+        #expect(waiter.result(within: 3) == .some(1))
     }
 
     /// The gate: a reader in this process wakes on a notifyEpoch bump made by
