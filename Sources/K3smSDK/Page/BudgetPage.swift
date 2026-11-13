@@ -48,15 +48,23 @@ public final class BudgetPage: @unchecked Sendable {
 
     /// The path the page was opened from.
     public let path: String
-    /// The ABI major of the page (always the one this SDK reads).
+    /// The ABI major this SDK reads. It is not read from the page: `open`
+    /// does not check the header, so `read()` is what reports a page of
+    /// another major (`abiMismatch`).
     public let abiMajor: UInt16
-    /// The page's header size in bytes.
+    /// The header size in bytes this SDK reads. Like `abiMajor` it is not
+    /// read from the page.
     public let headerSize: UInt32
     /// The ABI minor the page's header holds now. A higher minor than this
-    /// SDK knows is read up to the fields this SDK knows.
+    /// SDK knows is read up to the fields this SDK knows. It is not checked:
+    /// `open` does not check the header, so on a page that `read()` reports
+    /// `abiMismatch` or `truncated` it is whatever the bytes at its offset
+    /// hold, and 0 where the file ends before them (the mapping reads zeros
+    /// past the end of the file).
     public var abiMinor: UInt16 { Self.loadHeader(base).minor }
     /// The body size the page's header holds now, in bytes: the region the
-    /// seqlock covers.
+    /// seqlock covers. Like `abiMinor` it is not checked, and it is 0 where
+    /// the file ends before it.
     public var bodySize: UInt32 { Self.loadHeader(base).body }
 
     /// The start of the mapping; the notifier waits on a word of it.
@@ -75,7 +83,8 @@ public final class BudgetPage: @unchecked Sendable {
         _ = munmap(UnsafeMutableRawPointer(mutating: base), length)
     }
 
-    /// Maps the page at `path` read-only and checks its header.
+    /// Maps the page at `path` read-only. As in the C++ SDK, the header is
+    /// not checked here: every read checks it.
     ///
     /// The open never blocks: a FIFO or other special file at the path
     /// fails at once. Anything but a regular file is `notFound`, with the
@@ -84,9 +93,10 @@ public final class BudgetPage: @unchecked Sendable {
     /// its target is what is checked.
     ///
     /// It throws `notFound` when the file cannot be opened, examined or
-    /// mapped, `truncated` when the file is shorter than the header line or
-    /// its header and body, and `abiMismatch` when the magic, the ABI major
-    /// or the header size is not one this SDK reads.
+    /// mapped, and `truncated` when the file is empty. A file shorter than
+    /// the header line or its header and body opens, and `read()` reports
+    /// it `truncated`; a magic, ABI major or header size this SDK does not
+    /// read opens, and `read()` reports it `abiMismatch`.
     public static func open(path: String) throws(BudgetError) -> BudgetPage {
         // O_NONBLOCK keeps a FIFO without a writer from blocking the open;
         // the type check below then refuses it.
@@ -99,15 +109,12 @@ public final class BudgetPage: @unchecked Sendable {
             throw .notFound(errno: st.st_mode & S_IFMT == S_IFDIR ? EISDIR : EINVAL)
         }
         let size = Int(st.st_size)
-        guard size >= PageLayout.seq else { throw .truncated }
+        guard size > 0 else { throw .truncated }
         let length = min(size, PageLayout.pageSize)
         guard let m = mmap(nil, length, PROT_READ, MAP_SHARED, fd, 0), m != MAP_FAILED else {
             throw .notFound(errno: errno)
         }
-        let page = BudgetPage(path: path, base: UnsafeRawPointer(m), length: length)
-        // On a failure the page deinitializes and unmaps.
-        _ = try page.loadCheckedHeader()
-        return page
+        return BudgetPage(path: path, base: UnsafeRawPointer(m), length: length)
     }
 
     /// The three words of the header line: the magic, the word holding the
@@ -198,7 +205,11 @@ public final class BudgetPage: @unchecked Sendable {
     func read(
         now: Int64, afterAttempt: (Int) -> Void, betweenHeaderLoads: () -> Void
     ) -> Result<BudgetSnapshot, BudgetError> {
-        withUnsafeTemporaryAllocation(of: UInt64.self, capacity: PageLayout.bodyWords) { buf in
+        // A file shorter than the header line is truncated before any load,
+        // as in the C++ SDK. Without this guard the mapping's zeros past the
+        // end of the file would read as a bad magic (abiMismatch).
+        guard length >= PageLayout.seq else { return .failure(.truncated) }
+        return withUnsafeTemporaryAllocation(of: UInt64.self, capacity: PageLayout.bodyWords) { buf in
             for attempt in 0..<PageLayout.readerRetries {
                 let s1 = ck3sm_page_load_acquire(base, PageLayout.seq)
                 if s1 & 1 == 1 {

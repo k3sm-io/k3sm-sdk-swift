@@ -442,15 +442,17 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(got.capacity.memCapacityBytes != nil)
     }
 
-    /// A minor-0 page shorter than the minor-0 body is truncated; a page of
-    /// a higher minor than this SDK knows reads its known fields.
+    /// A minor-0 page shorter than the minor-0 body opens and reads
+    /// truncated; a page of a higher minor than this SDK knows reads its
+    /// known fields.
     @Test func bodySizeFollowsTheMinor() throws {
         let short = try ScratchPage(copying: "darwin.v1.page") { base in
             base.storeBytes(of: UInt16(0).littleEndian, toByteOffset: PageLayout.abiMinorOffset, as: UInt16.self)
             base.storeBytes(of: UInt32(PageLayout.minor0BodySize - 8).littleEndian,
                             toByteOffset: PageLayout.bodySizeOffset, as: UInt32.self)
         }
-        #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: short.path) }
+        let shortPage = try BudgetPage.open(path: short.path)
+        #expect(throws: BudgetError.truncated) { try shortPage.read().get() }
 
         let later = try ScratchPage(copying: "darwin.v1.page") { base in
             base.storeBytes(of: UInt16(2).littleEndian, toByteOffset: PageLayout.abiMinorOffset, as: UInt16.self)
@@ -467,8 +469,9 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
     /// as long as the known one still reads the minor-1 fields as absent.
     @Test func bodySizeEdgesOfTheMinors() throws {
         for body in [PageLayout.minor0BodySize, PageLayout.knownBodySize - 8] {
-            let later = try scratchPage(minor: 2, bodySize: body)
-            #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: later.path) }
+            let scratch = try scratchPage(minor: 2, bodySize: body)
+            let later = try BudgetPage.open(path: scratch.path)
+            #expect(throws: BudgetError.truncated) { try later.read().get() }
         }
         let long0 = try scratchPage(minor: 0, bodySize: PageLayout.knownBodySize)
         let now = try #require(try expectedFixtures()["darwin.v1.page"]).observedAt
@@ -949,13 +952,15 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
 
         let pastPage = UInt32(PageLayout.pageSize - PageLayout.headerSize + 8)
         let long = try write("long.v1.page", bodySize: pastPage)
-        #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: long) }
+        let longPage = try BudgetPage.open(path: long)
+        #expect(throws: BudgetError.truncated) { try longPage.read().get() }
     }
 
-    /// A failed open closes its descriptor: a file too short for the header
-    /// and a file with a bad magic, a few hundred times each, leave the
-    /// process's descriptor count where it was (the counting protocol is on
-    /// `openDescriptorCount`).
+    /// An open closes its descriptor whatever the read then reports: a file
+    /// too short for the header (read: truncated) and a file with a bad magic
+    /// (read: abiMismatch), opened and read a few hundred times each, leave
+    /// the process's descriptor count where it was (the counting protocol is
+    /// on `openDescriptorCount`).
     @Test func failedOpensLeakNoDescriptor() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("k3sm-sdk-fd-\(UUID().uuidString)")
@@ -969,8 +974,8 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         let perRound = 300
         func round() {
             for _ in 0..<perRound {
-                #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: short.path) }
-                #expect(throws: BudgetError.abiMismatch) { try BudgetPage.open(path: badMagic.path) }
+                #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: short.path).read().get() }
+                #expect(throws: BudgetError.abiMismatch) { try BudgetPage.open(path: badMagic.path).read().get() }
             }
         }
         round()
@@ -1079,9 +1084,9 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         #expect(linux.psi == nil)
     }
 
-    /// A file shorter than the header is truncated at open: the first 8, 23
-    /// and 63 bytes of the darwin fixture fail the open's size guard, and
-    /// exactly 64 bytes, which passes it, fails the header's size check.
+    /// A file shorter than the header opens and reads truncated: the first
+    /// 8, 23 and 63 bytes of the darwin fixture fail the read's length guard,
+    /// and exactly 64 bytes, which passes it, fails the header's size check.
     @Test(arguments: [8, 23, 63, 64])
     func aPageShorterThanTheHeaderIsTruncated(bytes: Int) throws {
         let dir = FileManager.default.temporaryDirectory
@@ -1091,6 +1096,7 @@ private func readFixture(_ name: String, now: Int64? = nil) throws -> Result<Bud
         let full = try Data(contentsOf: URL(fileURLWithPath: fixturePath("darwin.v1.page")))
         let path = dir.appendingPathComponent("short.v1.page")
         try full.prefix(bytes).write(to: path)
-        #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: path.path) }
+        let page = try BudgetPage.open(path: path.path)
+        #expect(throws: BudgetError.truncated) { try page.read().get() }
     }
 }

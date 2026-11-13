@@ -48,10 +48,11 @@ guest, or a pod on a Linux producer's node); readers on Linux use the C++ SDK.
 An opened `BudgetPage` reports its `path`, `abiMajor`, `abiMinor`,
 `headerSize` and `bodySize`; `abiMinor` and `bodySize` are read from the page
 on each access.
-`open` maps the page and checks its header, and throws `notFound` (with the
-errno), `truncated` or `abiMismatch`.
-`read()` reports `corrupt`, `torn` and `stale`, and can also report
-`abiMismatch` or `truncated` if a writer takes the page over. A page is stale
+`open` maps the page and throws `notFound` (with the errno), or `truncated`
+for an empty file; as in the C++ SDK it does not check the header.
+`read()` checks the header on every call and reports `abiMismatch` or
+`truncated` for a page this SDK does not read or a file too short for its
+header and body, as well as `corrupt`, `torn` and `stale`. A page is stale
 when its observation is more than three writer periods old:
 
 ```swift

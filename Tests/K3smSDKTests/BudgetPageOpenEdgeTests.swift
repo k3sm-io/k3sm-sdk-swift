@@ -40,6 +40,34 @@ private func withTempDir<T>(_ body: (URL) throws -> T) throws -> T {
         }
     }
 
+    /// Open refuses only an empty file, as the C++ open does; every other
+    /// check runs on each read. A 63-byte prefix of the fixture fails the
+    /// read's length guard, a 64-byte prefix (the header line intact) is
+    /// shorter than its header and body, 64 zero bytes have no magic, and a
+    /// full-length file with a bad magic opens and reads `abiMismatch`.
+    @Test func shortFileOpensAndReadReportsTruncated() throws {
+        let full = try Data(contentsOf: edgeFixture)
+        var badMagic = full
+        badMagic[0] ^= 0xFF
+        let cases: [(String, Data, BudgetError)] = [
+            ("prefix63", full.prefix(63), .truncated),
+            ("prefix64", full.prefix(64), .truncated),
+            ("zeros64", Data(count: 64), .abiMismatch),
+            ("magic", badMagic, .abiMismatch),
+        ]
+        try withTempDir { dir in
+            for (name, bytes, want) in cases {
+                let path = dir.appendingPathComponent("\(name).v1.page").path
+                try bytes.write(to: URL(fileURLWithPath: path))
+                let page = try BudgetPage.open(path: path)
+                #expect(throws: want, "\(name)") { try page.read().get() }
+            }
+            let empty = dir.appendingPathComponent("empty.v1.page").path
+            #expect(FileManager.default.createFile(atPath: empty, contents: Data()))
+            #expect(throws: BudgetError.truncated) { try BudgetPage.open(path: empty) }
+        }
+    }
+
     @Test func symlinkLoopForwardsELOOP() throws {
         try withTempDir { dir in
             let a = dir.appendingPathComponent("a").path
