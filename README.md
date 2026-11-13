@@ -179,6 +179,9 @@ the supply-chain check and the version check, runs the tests under the address,
 undefined-behavior and thread sanitizers, and then the NodeBudget, page reader
 and notifier stages.
 
+`hack/ci.sh` refuses to run as root, in every stage: two tests are enabled only
+for a non-root user, so a root run would pass without them. There is no waiver.
+
 Requirements: Swift 6.0 or later as the minimum compiler (the package declares
 `swift-tools-version:6.0` and builds in the Swift 6 language mode; the Xcode
 Command Line Tools are enough) on macOS 26 or later. The SDK depends on nothing

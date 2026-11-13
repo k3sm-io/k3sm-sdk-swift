@@ -4,6 +4,10 @@
 #
 # ci.sh -- the k3sm Swift SDK's gate. Run from anywhere; it works on a lone clone.
 #
+#  -1. the gate refuses to run as root, before any build or test step and in
+#      every stage (hack/lib/nonroot.sh): two tests are enabled only for a
+#      non-root uid, so a root run would go green without them. Its self-test,
+#      hack/verify-non-root-selftest.sh, runs on every full run, before stage 0.
 #   0. the package declares no dependencies (hack/lib/no-deps.sh on the
 #      show-dependencies stdout, after hack/verify-no-deps-selftest.sh, which
 #      runs on every run); it also fails when `swift package
@@ -71,6 +75,13 @@
 # this to turn off the inner sandbox and keep its own. Unset, nothing changes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The permission-denied tests (BudgetPageReaderParityTests openCarriesEacces,
+# BudgetNotifierDoorbellAccessTests unreadableDoorbellThrowsNotFoundWithEACCES)
+# are enabled only when the effective uid is not 0, so a root run would go
+# green without them: refuse it (hack/lib/nonroot.sh).
+# shellcheck source=hack/lib/nonroot.sh
+. hack/lib/nonroot.sh
+require_non_root || exit 1
 usage() { echo "usage: hack/ci.sh [--reader|--sanitize|--version-check|--nodebudget|--notifier|--stress|--bench-rig] | [--packages <file> [--base <sha>]] [--dry-run]"; exit 2; }
 stage=""
 pkg_file="" pkg_file_set=0 diff_base="" dry_run=0
@@ -261,6 +272,9 @@ case "$stage" in
 	--reader) run_reader; ci_done=1; exit 0 ;;
 	--notifier) run_notifier; ci_done=1; exit 0 ;;
 esac
+
+echo "==> the gate refuses to run as root (hack/lib/nonroot.sh)"
+bash hack/verify-non-root-selftest.sh
 
 echo "==> no third-party dependencies"
 # The package depends on nothing outside the toolchain, which is also why there
