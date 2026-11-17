@@ -30,7 +30,7 @@ hack/ci.sh      # the full gate
 ```
 - `hack/ci.sh` is the gate: no declared dependencies; `swift build` and `swift test`; a consumer
   package that depends on a git clone of the checkout by `.package(url: "file://...", revision:)`
-  and builds; shellcheck; license headers; dormant workflows; the dependency check.
+  and builds; shellcheck; license headers; no workflow files; the dependency check.
 - Named stages run alone: `--reader` (the page fixtures' digests and the `BudgetPageReaderTests`
   suite), `--notifier` (the `BudgetNotifierTests` suite with `K3SM_SDK_INTEGRATION=1`, which
   enables the process-spawning test the unit and sanitizer runs skip), `--stress`, `--bench-rig`
