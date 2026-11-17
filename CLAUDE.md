@@ -30,7 +30,7 @@ hack/ci.sh      # the full gate
 ```
 - `hack/ci.sh` is the gate: no declared dependencies; `swift build` and `swift test`; a consumer
   package that depends on a git clone of the checkout by `.package(url: "file://...", revision:)`
-  and builds; shellcheck; license headers; dormant workflows; the dependency check.
+  and builds; shellcheck; license headers; no workflow files; the dependency check.
 - Named stages run alone: `--reader` (the page fixtures' digests and the `BudgetPageReaderTests`
   suite), `--notifier` (the `BudgetNotifierTests` suite with `K3SM_SDK_INTEGRATION=1`, which
   enables the process-spawning test the unit and sanitizer runs skip), `--stress`, `--bench-rig`
@@ -48,6 +48,17 @@ hack/ci.sh      # the full gate
   `hack/ci.sh` adds it.
 - **No third-party dependencies, ever.** `hack/verify-deps.sh` (run by `ci.sh`) fails on any
   `.package(` not listed in `hack/deps.allow` with an exact revision, and the allow file is empty.
+
+## Containers only, and no CI on GitHub
+
+- **Containers only.** Nothing is installed on the host Mac, for supply-chain safety: no `brew`, no global
+  `go install`/`cargo install`/`pip install`/`npm -g` of a tool, no `curl | sh`, no `sudo` installs. Toolchains
+  and services run in k3sm pods; a tool the gate needs runs in a pod image pinned to an exact version and
+  checksum. When a gate names a missing tool, it gives the pinned command to run in the pod, not on the host.
+- **No CI on GitHub: no GitHub Actions workflows, ever, in any project, and Actions stays disabled; all gates
+  run locally in k3sm pods**, through Yureisha CI (the `yureisha/ci` commit status) or this repo's own gate
+  script, `hack/ci.sh`. No file may exist under `.github/workflows/`, commented out or not. `hack/ci.sh`
+  checks the DCO sign-off on every commit a branch adds.
 
 ## Conventions
 - **`swift-tools-version:6.0`, so Swift 6.0 is the minimum compiler** (`ci.sh` refuses an older one).
