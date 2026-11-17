@@ -365,7 +365,7 @@ grep -q "$rev" "$consumer/Package.resolved" \
 echo "    ok"
 
 echo "==> shellcheck (hack/**/*.sh)"
-command -v shellcheck >/dev/null || { echo "FAIL: shellcheck is not installed"; exit 1; }
+command -v shellcheck >/dev/null || { echo "FAIL: shellcheck is not on this host; it runs in a k3sm pod, never installed on the host (containers only, CONTRIBUTING.md)"; exit 1; }
 find hack -name '*.sh' -not -path '*/testdata/*' -print0 | xargs -0 shellcheck
 echo "    ok"
 
@@ -411,6 +411,32 @@ echo "==> placeholder stages (--stress --bench-rig)"
 for st in --stress --bench-rig; do
 	bash hack/ci.sh "$st" | sed 's/^/    /'
 done
+
+# DCO sign-off (there is no CI on GitHub: this stage is the check). Every commit this
+# branch adds over origin/main must carry a Signed-off-by line whose email is the
+# author's, matched as a FIXED string (an ERE breaks on id+user@users.noreply addresses).
+# A lone clone without origin/main skips, saying so; a synced main checks nothing.
+echo "==> [k3sm-sdk-swift] DCO sign-off (commits not on origin/main)"
+dco_signed() { # <author-email> <message>: exit 0 iff a Signed-off-by line names the email
+	printf '%s\n' "$2" | grep -iE '^Signed-off-by: ' | grep -qiF "<$1>"
+}
+dco_signed 'a+b@users.noreply.github.com' 'x
+
+Signed-off-by: A <a+b@users.noreply.github.com>' || { echo "FAIL: [k3sm-sdk-swift] DCO self-test: a signed commit was rejected"; exit 1; }
+! dco_signed 'a@example.com' 'x
+
+Co-authored-by: A <a@example.com>' || { echo "FAIL: [k3sm-sdk-swift] DCO self-test: an unsigned commit passed"; exit 1; }
+if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
+	dco_bad=0
+	for sha in $(git rev-list --no-merges origin/main..HEAD); do
+		dco_signed "$(git show -s --format='%ae' "$sha")" "$(git show -s --format='%B' "$sha")" \
+			|| { echo "    UNSIGNED: $(git show -s --format='%h %s' "$sha")"; dco_bad=1; }
+	done
+	[ "$dco_bad" = 0 ] || { echo "FAIL: [k3sm-sdk-swift] sign off the commits above: git commit -s (see CONTRIBUTING.md)"; exit 1; }
+	echo "    sign-off OK ($(git rev-list --no-merges --count origin/main..HEAD) new commit(s))"
+else
+	echo "    SKIP: no origin/main ref in this clone, nothing to compare against"
+fi
 
 echo "k3sm-sdk-swift ci: green"
 ci_done=1
