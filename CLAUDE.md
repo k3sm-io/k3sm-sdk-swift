@@ -1,5 +1,12 @@
 # k3sm Swift SDK
 
+@.claude/rules/native-builds.md
+
+Use the `yurei build` queue via the runtime's executable absolute `YUREI_BIN`; verify native pod placement.
+Preserve BypassGuard and every real human gate; this policy never widens credential, money, release or irreversible authority.
+
+All build and test examples below run through the approved native Darwin pod route; older host exceptions are superseded.
+
 A Swift client for the k3sm node pressure and headroom API (SwiftPM package `K3smSDK`, one library
 product of the same name). It is a leaf: it talks to a k3sm node over the API that node serves and
 imports no code from the other k3sm repositories. It has no dependencies, and it has no edge back
@@ -68,7 +75,7 @@ hack/ci.sh      # the full gate
 - Every `.swift` file starts with the Apache-2.0 header in `hack/boilerplate/boilerplate.swift.txt`
   (after the tools-version line in `Package.swift`); `hack/verify-boilerplate.sh` checks it. Shell
   files carry the two-line `Copyright` and `SPDX-License-Identifier` comment.
-- Workflows under `.github/workflows/` stay fully commented out; `ci.sh` checks it.
+- No workflows may exist under `.github/workflows/`; `ci.sh` checks their absence.
 
 ## Commits
 Conventional Commits per `CONTRIBUTING.md`. Scopes are the target directories, lowercased
